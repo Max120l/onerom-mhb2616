@@ -91,7 +91,15 @@ static volatile uint32_t g_served;
 #define MHB_DIAG 0
 #endif
 
-#if MHB_DIAG
+#if MHB_DIAG == 2
+// The index of the last access we served.  A machine that halts stops
+// changing it, so whatever it holds when the bus goes quiet is the last
+// thing the processor ever read -- which, looked up in the monitor image,
+// says where it died and what byte killed it.
+static volatile uint16_t g_last_idx;
+#endif
+
+#if MHB_DIAG == 1
 // One bit per bank the machine has actually asked us for since power-on.
 // Set-only, so the worst a race can do is delay a bit's appearance by one
 // frame.  This is the instrument that turns "it does not boot" into a
@@ -284,8 +292,9 @@ static void __not_in_flash_func(serve_forever)(void) {
     bool driving = false;
 
     for (;;) {
-        uint32_t in = sio_hw->gpio_in;
-        uint32_t v  = g_lut16[(in >> 8) & 0xFFFFu];
+        uint32_t in  = sio_hw->gpio_in;
+        uint32_t idx = (in >> 8) & 0xFFFFu;
+        uint32_t v   = g_lut16[idx];
 
         if (v & MHB_LUT16_DRIVE) {
             // Data before direction, as above.  The drive decision -- which
@@ -297,10 +306,14 @@ static void __not_in_flash_func(serve_forever)(void) {
                 sio_hw->gpio_oe_set = 0xFFu;
                 driving = true;
                 g_served++;
-#if MHB_DIAG
+#if MHB_DIAG == 1
                 // The bank is already in the word we looked up; see decode.h.
                 g_bank_seen |= (uint8_t)(1u << ((v & MHB_LUT16_BANK_MASK)
                                                 >> MHB_LUT16_BANK_SHIFT));
+#elif MHB_DIAG == 2
+                // One store.  Decoding it into bank+address costs two loops
+                // and belongs on core 0, which has nothing else to do.
+                g_last_idx = (uint16_t)idx;
 #endif
             }
         } else if (driving) {
@@ -326,7 +339,59 @@ int main(void) {
 
     multicore_launch_core1(serve_forever);
 
-#if MHB_DIAG
+#if MHB_DIAG == 2
+    // Kill-address frame: the last monitor offset the processor read.
+    //
+    // Thirteen bits, most significant first: two of bank, then A10 down to
+    // A0.  Long green is a 1, short red a 0, with a blue blink every four
+    // pulses so a reader never has to hold a running count.  Look the
+    // resulting offset up in the monitor image and the byte at it is the
+    // last instruction the processor ever fetched.
+#if MHB_BOARD_HAS_NEOPIXEL
+    neo_init();
+#endif
+    while (true) {
+        uint16_t idx = g_last_idx;
+        unsigned addr = mhb_addr_from_index(idx);
+        unsigned bank = (g_lut16[idx] & MHB_LUT16_BANK_MASK)
+                        >> MHB_LUT16_BANK_SHIFT;
+        unsigned off = (bank << 11) | addr;   // 13 bits
+#if MHB_BOARD_HAS_NEOPIXEL
+        neo_put(NEO_BOOT);
+        sleep_ms(1800);
+        neo_put(NEO_OFF);
+        sleep_ms(700);
+        for (int b = 12; b >= 0; b--) {
+            bool one = (off >> b) & 1;
+            neo_put(one ? NEO_SERVING : NEO_GRB(0x00, 0x14, 0x00));
+            sleep_ms(one ? 650 : 150);
+            neo_put(NEO_OFF);
+            sleep_ms(350);
+            if (b % 4 == 0 && b) {          // group separator
+                neo_put(NEO_BOOT);
+                sleep_ms(120);
+                neo_put(NEO_OFF);
+                sleep_ms(350);
+            }
+        }
+        sleep_ms(1500);
+#else
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+        sleep_ms(1800);
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+        sleep_ms(700);
+        for (int b = 12; b >= 0; b--) {
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+            sleep_ms(((off >> b) & 1) ? 650 : 100);
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+            sleep_ms((b % 4 == 0 && b) ? 800 : 350);
+        }
+        sleep_ms(1500);
+#endif
+    }
+#endif // MHB_DIAG == 2
+
+#if MHB_DIAG == 1
     // Coverage frame: which banks has this machine actually read?
     //
     // A board that does not boot a machine gives one bit of information.
@@ -376,7 +441,7 @@ int main(void) {
         sleep_ms(1200);
 #endif
     }
-#endif // MHB_DIAG
+#endif // MHB_DIAG == 1
 
     // Core 0 turns the served-cycle count into something visible.  Installed
     // in a machine that will not boot, the useful question is whether the

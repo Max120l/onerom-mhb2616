@@ -107,8 +107,14 @@ endif()
 # saying which of the four banks the machine has actually read since
 # power-on.  Off by default -- a board left in a machine should be a ROM
 # and nothing else.  See main.c for how to read the frame.
-option(MHB_DIAG "Blink per-bank coverage instead of the status light" OFF)
-target_compile_definitions(mhb2616 PRIVATE MHB_DIAG=$<BOOL:${MHB_DIAG}>)
+#   1  per-bank coverage: which banks has the machine ever read?
+#   2  kill address: the last monitor offset it read before going quiet,
+#      thirteen pulses, most significant first
+set(MHB_DIAG "0" CACHE STRING "Diagnostic frame: 0 off, 1 coverage, 2 kill address")
+if(NOT MHB_DIAG MATCHES "^[0-2]$")
+    message(FATAL_ERROR "MHB_DIAG must be 0, 1 or 2")
+endif()
+target_compile_definitions(mhb2616 PRIVATE MHB_DIAG=${MHB_DIAG})
 
 # System clock in kHz.  150000 is the RP2350's rated speed and the default;
 # the serve loop fits a 2616's access time at it several times over.

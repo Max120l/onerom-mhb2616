@@ -91,3 +91,30 @@ dead stop looking alike:
 
 Some WS2812 clones want RGB order rather than GRB; if the colours come
 out permuted, that is the first thing to check (`NEO_GRB` in `main.c`).
+
+## Serving latency, counted from the disassembly
+
+Worth having as numbers rather than adjectives, because "the board is too
+fast for the machine" is a tempting theory and these are what refute it.
+Counted off the compiled serve loop at 150 MHz (6.67 ns/cycle), including
+the RP2350's two-flop GPIO input synchroniser:
+
+| event | best | worst |
+|-------|------|-------|
+| data valid after a select falls | 60 ns | 113 ns |
+| bus released after a select rises | 47 ns | 120 ns |
+
+Against the part being replaced: a 2616/2716 answers a select in up to
+~450 ns and floats its outputs 0–100 ns after deselect. So the board is
+three to seven times quicker to present data — the margin that makes this
+project viable — and **releases the bus no faster than the original
+chip's own specified window**. A host that latches read data correctly
+from a real 2616 cannot be losing it to an early release here; the
+release is, if anything, on the slow side of what the chip could legally
+do.
+
+That kills the data-hold-time hypothesis for this design without needing
+a scope, and it also says a deliberate hold delay would be treating a
+symptom that cannot exist. If a future host ever does need one, the place
+to add it is the `else if (driving)` arm of the serve loop, and the note
+to write down first is what measurement justified it.
