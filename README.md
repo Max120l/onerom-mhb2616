@@ -136,11 +136,12 @@ Carried over from the sibling project, because they were earned there:
 
 ## Before you plug anything in
 
-1. **Do the bank bookkeeping** ([docs/PMD85-3.md](docs/PMD85-3.md)): dump
-   the four originals, match them to reference bank checksums with
-   `tools/rom_checksum.py`, and write down per socket: pair, PR sense,
-   bank. Those are the `MHB_SOCKET_PAIR` / `MHB_PR_INVERT` /
-   `MHB_SOCKET_BANK` build switches.
+1. **Take the build switches from the socket table**
+   ([docs/PMD85-3.md](docs/PMD85-3.md)): `MHB_SOCKET_PAIR` /
+   `MHB_PR_INVERT` / `MHB_SOCKET_BANK` per socket, settled byte-for-byte
+   against the Infoserver archive. (For a machine with readable originals,
+   `tools/rom_checksum.py --identify` cross-checks a dump against the
+   table — worth doing once if any chip will stay in service.)
 2. **Flash the selftest image first** (`gen_rom_images.py --selftest`),
    read the board through a 2716 programmer (build with
    `-DMHB_STATIC_IGNORE_PR=ON`, never in a machine), and run
