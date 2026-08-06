@@ -18,11 +18,18 @@ unsigned mhb_addr_from_index(uint16_t idx) {
     return addr;
 }
 
-unsigned mhb_bank_from_index(uint16_t idx) {
-    unsigned bank = 0;
-    if (idx & (1u << (GPIO_BANK_A11 - 8))) bank |= 1;
-    if (idx & (1u << (GPIO_BANK_A12 - 8))) bank |= 2;
-    return bank;
+uint16_t mhb_index_of(unsigned addr) {
+    uint16_t idx = 0;
+    for (unsigned bit = 0; bit < 11; bit++) {
+        if (addr & (1u << bit)) {
+            idx |= 1u << (addr_gpio[bit] - 8);
+        }
+    }
+    return idx;
+}
+
+uint16_t mhb_index_addr_mask(void) {
+    return mhb_index_of(0x7FF);
 }
 
 uint8_t mhb_scramble_data(uint8_t byte) {
@@ -35,49 +42,64 @@ uint8_t mhb_scramble_data(uint8_t byte) {
     return out;
 }
 
-uint16_t mhb_index_of(unsigned bank, unsigned addr) {
-    uint16_t idx = 0;
-    for (unsigned bit = 0; bit < 11; bit++) {
-        if (addr & (1u << bit)) {
-            idx |= 1u << (addr_gpio[bit] - 8);
-        }
-    }
-    if (bank & 1) idx |= 1u << (GPIO_BANK_A11 - 8);
-    if (bank & 2) idx |= 1u << (GPIO_BANK_A12 - 8);
-    return idx;
-}
-
-uint16_t mhb_index_addr_mask(void) {
-    return mhb_index_of(3, 0x7FF);
-}
-
-void mhb_build_lut(uint8_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
-                   uint8_t present, mhb_lut_mode_t mode, unsigned fixed_bank) {
+void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
+                     uint8_t present, const mhb_lut16_cfg_t *cfg) {
     // 64 K iterations of a few table walks: pennies, paid once at boot.
     for (uint32_t idx = 0; idx < MHB_LUT_SIZE; idx++) {
         unsigned addr = mhb_addr_from_index((uint16_t)idx);
-        unsigned bank = (mode == MHB_LUT_BANK_FROM_INDEX)
-                            ? mhb_bank_from_index((uint16_t)idx)
-                            : (fixed_bank & 3);
-        uint8_t byte = (present & (1u << bank)) ? banks[bank][addr] : 0xFF;
+        unsigned a11  = ((idx & MHB_IDX_PR) ? 1u : 0u) ^ (cfg->pr_invert ? 1u : 0u);
+
+        // Which pair, if any, is this access for?  Own /CS wins if the
+        // decoder ever asserted both, which it should not.
+        int pair = -1;
+        if (!(idx & MHB_IDX_nCS)) {
+            pair = (int)cfg->socket_pair;
+        } else if (cfg->use_x1 && !(idx & MHB_IDX_X1)) {
+            pair = (int)!cfg->socket_pair;
+        }
+
+        unsigned drive = 0;
+        unsigned bank = 0;
+        if (pair >= 0) {
+            bank = (unsigned)pair * 2 + a11;
+            if (cfg->fixed_bank >= 0) {
+                // Drop-in replacement: answer exactly when the original in
+                // this socket would have.  ignore_pr widens that to the
+                // whole pair select, for programmer reads only.
+                drive = (pair == (int)cfg->socket_pair)
+                        && (cfg->ignore_pr || bank == (unsigned)cfg->fixed_bank);
+                bank = (unsigned)cfg->fixed_bank;
+            } else {
+                drive = 1;
+            }
+            drive = drive && ((present >> bank) & 1);
+        }
+
+        uint8_t byte = ((present >> bank) & 1) ? banks[bank][addr] : 0xFF;
+        lut[idx] = mhb_scramble_data(byte) | (drive ? MHB_LUT16_DRIVE : 0);
+    }
+}
+
+void mhb_build_lut8(uint8_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
+                    uint8_t present, unsigned bank) {
+    bank &= 3;
+    for (uint32_t idx = 0; idx < MHB_LUT_SIZE; idx++) {
+        unsigned addr = mhb_addr_from_index((uint16_t)idx);
+        uint8_t byte = ((present >> bank) & 1) ? banks[bank][addr] : 0xFF;
         lut[idx] = mhb_scramble_data(byte);
     }
 }
 
-void mhb_select_masks(bool gate_ce, bool gate_oe, uint32_t *mask, uint32_t *value) {
-    uint32_t m = 0, v = 0;
-    if (gate_ce) {
-        m |= 1u << GPIO_nCE;          // required low: contributes 0 to value
+void mhb_select_masks(bool ignore_pr, bool pr_high,
+                      uint32_t *mask, uint32_t *value) {
+    uint32_t m = 1u << GPIO_nCS;      // /CS low, always: contributes 0
+    uint32_t v = 0;
+    if (!ignore_pr) {
+        m |= 1u << GPIO_PR;
+        if (pr_high) {
+            v |= 1u << GPIO_PR;
+        }
     }
-    if (gate_oe) {
-        m |= 1u << GPIO_nOE;
-    }
-#if MHB_PIN21_ROLE == MHB_PIN21_LOW
-    m |= 1u << GPIO_PIN21;
-#elif MHB_PIN21_ROLE == MHB_PIN21_HIGH
-    m |= 1u << GPIO_PIN21;
-    v |= 1u << GPIO_PIN21;
-#endif
     *mask = m;
     *value = v;
 }

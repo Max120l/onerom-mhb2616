@@ -4,9 +4,9 @@
 // The socket-pin -> GPIO half of this file is taken from the One ROM project's
 // own board description (rust/config/json/fire-24-e.json) and is known good --
 // it is the same table the onerom-1801re2 project verified on hardware.  The
-// chip-pin -> signal half is the JEDEC 2716 read-mode pinout, which every 2616
-// reference agrees on for pins 1-20 and 22-24.  Pin 21 is the one open
-// question; see MHB_PIN21_ROLE below and docs/MHB2616.md.
+// chip-pin -> signal half is read off the PMD 85-3 CPU board schematic
+// (DOSKA CPU, 1 PK 280 77), which settled the control pins in a way the JEDEC
+// 2716 pinout would not have predicted; see below.
 
 #ifndef BOARD_FIRE24E_H
 #define BOARD_FIRE24E_H
@@ -19,8 +19,8 @@
 // Every other socket pin lands on a GPIO in 0..7 or 10..23.  GPIO 8 and 9 go
 // to the X1/X2 jumper pads, NOT to the socket.  For the 1801RE2 that gap was
 // a constraint; here it is a gift: the eight data pins land on GPIO 0..7 and
-// everything the serve loop must *read* -- eleven address lines, three
-// control pins and the two X pads -- lands on GPIO 8..23.  One 16-bit shift
+// everything the serve loop must *read* -- eleven address lines, the two
+// select pins and the two X pads -- lands on GPIO 8..23.  One 16-bit shift
 // of the input register is the whole address decode.
 
 #define SOCKET_PIN_TO_GPIO { \
@@ -48,34 +48,44 @@
 // mode instead of touching the bus at all.
 #define GPIO_RECOVERY_JUMPER  25
 
-// Select jumpers 2 and 3, read once at boot as a bank number in STATIC bank
-// mode: jumper 2 is bit 0, jumper 3 is bit 1, fitted = 1.  Ignored by the
-// other bank sources.
+// Select jumpers 2 and 3, read once at boot as a bank number in the modes
+// that need one (STATIC, HOTSPOT): jumper 2 is bit 0, jumper 3 is bit 1,
+// fitted = 1.  Ignored by the other bank sources.
 #define GPIO_BANK_JUMPER_0   26
 #define GPIO_BANK_JUMPER_1   27
 
 // ---------------------------------------------------------------------------
-// MHB 2616 chip pinout (JEDEC 2716 read mode)
+// MHB 2616 chip pinout, as wired in the PMD 85-3
 // ---------------------------------------------------------------------------
+//
+// From the DOSKA CPU schematic (1 PK 280 77, PRE TYP PMD 85-3), sockets
+// DS4 (E), DS5 (D), DS6 (0), DS7 (B):
 //
 //   pin  signal          pin  signal          pin  signal
 //    1   A7               9   D0              17   D7
-//    2   A6              10   D1              18   /CE
+//    2   A6              10   D1              18   PR
 //    3   A5              11   D2              19   A10
-//    4   A4              12   GND             20   /OE
-//    5   A3              13   D3              21   see MHB_PIN21_ROLE
+//    4   A4              12   GND             20   /CS
+//    5   A3              13   D3              21   +5 V
 //    6   A2              14   D4              22   A9
 //    7   A1              15   D5              23   A8
 //    8   A0              16   D6              24   Vcc
 //
-// Power follows JEDEC and matches what the Fire 24 hard-wires (pin 24 = Vcc,
-// pin 12 = GND), so the board drops in unmodified.
+// Address and data follow JEDEC 2716; power matches what the Fire 24
+// hard-wires, so the board drops in unmodified.  The control pins do NOT
+// follow the 2716, and this is read off the schematic, not inferred:
 //
-// Pin 21 is Vpp on a 2716 EPROM -- tied to +5 V for reading.  What the 2616
-// PROM does with it is not established from a primary source yet; every
-// in-circuit design this firmware cares about either ties it to Vcc or to a
-// select.  It lands on GPIO 12, is never driven, and its role in gating is a
-// build option.  See docs/MHB2616.md for how to settle it with a meter.
+//   /CS on pin 20 (2716: /OE), drawn active low, is the PAIR select:
+//   DS4+DS5 share one /CS net, DS6+DS7 the other.  The mainboard decoder
+//   asserts one per 4 KB half of the 8 KB monitor.
+//
+//   PR on pin 18 (2716: /CE) carries A11: straight into DS4 and DS6,
+//   inverted into DS5 and DS7.  An address bit delivered as a select --
+//   which is what lets one board serve a whole pair from one socket with
+//   no wires at all: the bank bit is already on pin 18.
+//
+//   Pin 21 (2716: Vpp) is strapped to +5 V along with pin 24.  It carries
+//   no information; the firmware never drives it and never reads it.
 
 // GPIO carrying each address line.  A0..A10, in that order.  The order is
 // scrambled relative to the socket, which costs nothing: the serve loop's
@@ -96,29 +106,13 @@
     /* D0 */ 7, /* D1 */ 6, /* D2 */ 5, /* D3 */ 0, \
     /* D4 */ 1, /* D5 */ 2, /* D6 */ 3, /* D7 */ 4 }
 
-// The two bank-address bits that do not exist on a 2716-footprint socket.
-// In EXT bank mode they arrive on the X pads by wire from the host's address
-// decoder: A11 -> X1, A12 -> X2.  In the other bank modes the pads are pulled
-// low and the lookup tables are built so their state does not matter.
-#define GPIO_BANK_A11   GPIO_X1     // GPIO 9,  index bit 1
-#define GPIO_BANK_A12   GPIO_X2     // GPIO 8,  index bit 0
+// Select pins, per the schematic reading above.
+#define GPIO_nCS    10    // /CS, socket pin 20: active-low pair select
+#define GPIO_PR     11    // PR,  socket pin 18: A11, possibly inverted
+#define GPIO_PIN21  12    // socket pin 21: +5 V in this machine; unused
 
-// Control pins.
-#define GPIO_nCE    11    // /CE, socket pin 18: the per-socket decoded select
-#define GPIO_nOE    10    // /OE, socket pin 20
-#define GPIO_PIN21  12    // socket pin 21: Vpp on a 2716; role configurable
-
-// What pin 21 must read for the board to drive the bus.  IGNORE is right for
-// a socket that ties it to Vcc (the 2716 arrangement) -- and is the default
-// because driving-when-unsure is the failure mode that fights the host for
-// the bus, and IGNORE at least matches the only arrangement actually
-// documented.  If the 2616 turns out to carry a second select there, switch
-// to LOW or HIGH from the build.
-#define MHB_PIN21_IGNORE  0
-#define MHB_PIN21_LOW     1     // serve only while pin 21 reads low
-#define MHB_PIN21_HIGH    2     // serve only while pin 21 reads high
-#ifndef MHB_PIN21_ROLE
-#define MHB_PIN21_ROLE  MHB_PIN21_IGNORE
-#endif
+// FULL8K mode: the other pair's /CS, brought to the X1 pad by one flying
+// lead from the corresponding pin 20.  X2 is unassigned and kept pulled.
+#define GPIO_OTHER_nCS  GPIO_X1
 
 #endif // BOARD_FIRE24E_H

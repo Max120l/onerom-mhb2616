@@ -1,11 +1,12 @@
-// Host tests for decode.c: the bit scrambles, the LUT builder, the gating
-// masks.  No SDK, no hardware -- see the Makefile.
+// Host tests for decode.c: the bit scrambles, both table builders, the
+// gating masks.  No SDK, no hardware -- see the Makefile.
 //
 // The properties tested are the ones a wiring mistake would break silently:
 // index_of and addr_from_index must be inverses; every address GPIO must sit
-// inside the 16-bit index field and outside the data field; the LUT must
-// return the right pre-scrambled byte for every (bank, addr); absent banks
-// must read 0xFF; the fixed-bank tables must not care about the X-pad bits.
+// inside the 16-bit index field and outside the data field; the tables must
+// return the right pre-scrambled byte -- and, for the 16-bit tables, the
+// right *drive decision* -- for every combination of /CS, PR and X1 that the
+// PMD 85-3 wiring can produce.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,20 +25,30 @@ static unsigned g_failures;
     } \
 } while (0)
 
-// A recognisable, bank-dependent filling: no two (bank, addr) pairs collide
-// within the range the tests probe against each other.
+// A recognisable, bank-dependent filling.
 static uint8_t fill(unsigned bank, unsigned addr) {
     return (uint8_t)(addr * 7 + bank * 61 + 3);
 }
 
 static uint8_t banks[MHB_BANKS][MHB_BANK_SIZE];
 
+// The index a host access produces: address bits plus explicit select
+// states.  cs/x1 are the *electrical* levels (true = high = deasserted for
+// these active-low selects); pr is the electrical level of pin 18.
+static uint16_t make_idx(unsigned addr, bool cs_high, bool pr_high, bool x1_high) {
+    uint16_t idx = mhb_index_of(addr);
+    if (cs_high) idx |= MHB_IDX_nCS;
+    if (pr_high) idx |= MHB_IDX_PR;
+    if (x1_high) idx |= MHB_IDX_X1;
+    return idx;
+}
+
 static void test_pin_map_sanity(void) {
     static const uint8_t addr_gpio[11] = ADDR_GPIO;
     static const uint8_t data_gpio[8]  = DATA_GPIO;
     for (unsigned i = 0; i < 11; i++) {
-        CHECK(addr_gpio[i] >= 10 && addr_gpio[i] <= 23,
-              "A%u on GPIO %u, outside the index field", i, addr_gpio[i]);
+        CHECK(addr_gpio[i] >= 13 && addr_gpio[i] <= 23,
+              "A%u on GPIO %u, outside 13..23", i, addr_gpio[i]);
         for (unsigned j = i + 1; j < 11; j++) {
             CHECK(addr_gpio[i] != addr_gpio[j], "A%u and A%u share a GPIO", i, j);
         }
@@ -49,30 +60,28 @@ static void test_pin_map_sanity(void) {
         seen |= 1u << data_gpio[i];
     }
     CHECK(seen == 0xFF, "data GPIOs are not a permutation of 0..7");
-    CHECK(GPIO_BANK_A11 == 9 && GPIO_BANK_A12 == 8, "bank bits off the X pads");
+    // The select bits must be where the schematic reading put them, and
+    // distinct from every address bit.
+    CHECK(GPIO_nCS == 10 && GPIO_PR == 11 && GPIO_PIN21 == 12,
+          "select GPIOs moved without the tests noticing");
+    CHECK((mhb_index_addr_mask()
+           & (MHB_IDX_nCS | MHB_IDX_PR | MHB_IDX_X1 | MHB_IDX_X2 | MHB_IDX_PIN21)) == 0,
+          "select bits leak into the address mask");
 }
 
 static void test_index_roundtrip(void) {
-    for (unsigned bank = 0; bank < 4; bank++) {
-        for (unsigned addr = 0; addr < 2048; addr++) {
-            uint16_t idx = mhb_index_of(bank, addr);
-            CHECK(mhb_addr_from_index(idx) == addr,
-                  "addr 0x%03X came back 0x%03X", addr,
-                  mhb_addr_from_index(idx));
-            CHECK(mhb_bank_from_index(idx) == bank,
-                  "bank %u came back %u", bank, mhb_bank_from_index(idx));
-        }
+    for (unsigned addr = 0; addr < 2048; addr++) {
+        uint16_t idx = mhb_index_of(addr);
+        CHECK(mhb_addr_from_index(idx) == addr,
+              "addr 0x%03X came back 0x%03X", addr, mhb_addr_from_index(idx));
     }
-    // Control bits must not disturb the address.
-    uint16_t idx = mhb_index_of(2, 0x555);
-    uint16_t ctl = (uint16_t)((1u << (GPIO_nCE - 8)) | (1u << (GPIO_nOE - 8))
-                              | (1u << (GPIO_PIN21 - 8)));
-    CHECK(mhb_addr_from_index(idx | ctl) == 0x555, "control bits leak into addr");
-    CHECK((mhb_index_addr_mask() & ctl) == 0, "control bits in the addr mask");
+    // Select bits must not disturb the address.
+    uint16_t ctl = MHB_IDX_nCS | MHB_IDX_PR | MHB_IDX_X1 | MHB_IDX_X2 | MHB_IDX_PIN21;
+    CHECK(mhb_addr_from_index(mhb_index_of(0x555) | ctl) == 0x555,
+          "select bits leak into decoded address");
 }
 
 static void test_scramble(void) {
-    // A permutation: every byte distinct, popcount preserved.
     uint8_t hit[256] = {0};
     for (unsigned b = 0; b < 256; b++) {
         uint8_t s = mhb_scramble_data((uint8_t)b);
@@ -81,50 +90,136 @@ static void test_scramble(void) {
         CHECK(__builtin_popcount(s) == __builtin_popcount(b),
               "scramble gains or loses bits at 0x%02X", b);
     }
-    CHECK(mhb_scramble_data(0x00) == 0x00, "zero must scramble to zero");
-    CHECK(mhb_scramble_data(0xFF) == 0xFF, "ones must scramble to ones");
 }
 
-static uint8_t *lut;
+static uint16_t *lut16;
 
-static void test_lut_ext(void) {
-    mhb_build_lut(lut, banks, 0x0F, MHB_LUT_BANK_FROM_INDEX, 0);
-    for (unsigned bank = 0; bank < 4; bank++) {
-        for (unsigned addr = 0; addr < 2048; addr += 17) {
-            uint16_t idx = mhb_index_of(bank, addr);
-            CHECK(lut[idx] == mhb_scramble_data(fill(bank, addr)),
-                  "EXT lut wrong at bank %u addr 0x%03X", bank, addr);
-        }
+// PAIR mode, socket in pair 0, PR straight (a DS4-like socket).
+static void test_lut16_pair(void) {
+    mhb_lut16_cfg_t cfg = { .socket_pair = 0, .pr_invert = false,
+                            .use_x1 = false, .fixed_bank = -1 };
+    mhb_build_lut16(lut16, banks, 0x0F, &cfg);
+
+    for (unsigned addr = 0; addr < 2048; addr += 19) {
+        // /CS low, PR low -> A11 = 0 -> bank 0.
+        uint16_t v = lut16[make_idx(addr, false, false, true)];
+        CHECK((v & MHB_LUT16_DRIVE) && (v & 0xFF) == mhb_scramble_data(fill(0, addr)),
+              "pair: bank 0 wrong at 0x%03X", addr);
+        // /CS low, PR high -> A11 = 1 -> bank 1.
+        v = lut16[make_idx(addr, false, true, true)];
+        CHECK((v & MHB_LUT16_DRIVE) && (v & 0xFF) == mhb_scramble_data(fill(1, addr)),
+              "pair: bank 1 wrong at 0x%03X", addr);
+        // /CS high -> no drive, whatever PR and X1 do.
+        CHECK(!(lut16[make_idx(addr, true, false, true)] & MHB_LUT16_DRIVE),
+              "pair: drives with /CS high at 0x%03X", addr);
+        CHECK(!(lut16[make_idx(addr, true, true, false)] & MHB_LUT16_DRIVE),
+              "pair: X1 must be ignored without use_x1 at 0x%03X", addr);
     }
-    // Absent banks are 0xFF -- the drive-permission mask is what actually
-    // keeps them off the bus in EXT mode, but the contents should not lie.
-    mhb_build_lut(lut, banks, 0x0B, MHB_LUT_BANK_FROM_INDEX, 0);
-    uint16_t idx = mhb_index_of(2, 0x123);
-    CHECK(lut[idx] == 0xFF, "absent bank served real data");
+
+    // The inverted socket (DS5-like): PR low now means A11 = 1.
+    cfg.pr_invert = true;
+    mhb_build_lut16(lut16, banks, 0x0F, &cfg);
+    uint16_t v = lut16[make_idx(0x111, false, false, true)];
+    CHECK((v & 0xFF) == mhb_scramble_data(fill(1, 0x111)),
+          "pair: pr_invert did not flip the bank");
+
+    // Pair 1 serves banks 2/3.
+    cfg = (mhb_lut16_cfg_t){ .socket_pair = 1, .pr_invert = false,
+                             .use_x1 = false, .fixed_bank = -1 };
+    mhb_build_lut16(lut16, banks, 0x0F, &cfg);
+    v = lut16[make_idx(0x222, false, true, true)];
+    CHECK((v & 0xFF) == mhb_scramble_data(fill(3, 0x222)),
+          "pair 1: bank 3 wrong");
 }
 
-static void test_lut_fixed(void) {
-    mhb_build_lut(lut, banks, 0x0F, MHB_LUT_BANK_FIXED, 1);
-    for (unsigned addr = 0; addr < 2048; addr += 13) {
-        // Whatever the X pads read, a fixed-bank table answers from its bank.
-        for (unsigned x = 0; x < 4; x++) {
-            uint16_t idx = mhb_index_of(x, addr);
-            CHECK(lut[idx] == mhb_scramble_data(fill(1, addr)),
-                  "fixed lut heeds the X pads at addr 0x%03X x=%u", addr, x);
-        }
+static void test_lut16_full8k(void) {
+    mhb_lut16_cfg_t cfg = { .socket_pair = 0, .pr_invert = false,
+                            .use_x1 = true, .fixed_bank = -1 };
+    mhb_build_lut16(lut16, banks, 0x0F, &cfg);
+
+    unsigned addr = 0x3A5;
+    // Own /CS active: banks 0/1 by PR.
+    uint16_t v = lut16[make_idx(addr, false, true, true)];
+    CHECK((v & MHB_LUT16_DRIVE) && (v & 0xFF) == mhb_scramble_data(fill(1, addr)),
+          "full8k: own pair bank 1 wrong");
+    // Other pair's /CS (X1) active: banks 2/3 by PR.
+    v = lut16[make_idx(addr, true, false, false)];
+    CHECK((v & MHB_LUT16_DRIVE) && (v & 0xFF) == mhb_scramble_data(fill(2, addr)),
+          "full8k: other pair bank 2 wrong");
+    v = lut16[make_idx(addr, true, true, false)];
+    CHECK((v & 0xFF) == mhb_scramble_data(fill(3, addr)),
+          "full8k: other pair bank 3 wrong");
+    // Neither select active: silence.
+    CHECK(!(lut16[make_idx(addr, true, true, true)] & MHB_LUT16_DRIVE),
+          "full8k: drives with no select active");
+    // Both active should not happen; own pair wins, but it must still drive
+    // *something* deterministic rather than glitch.
+    v = lut16[make_idx(addr, false, false, false)];
+    CHECK((v & MHB_LUT16_DRIVE) && (v & 0xFF) == mhb_scramble_data(fill(0, addr)),
+          "full8k: both-selects case not deterministic");
+
+    // An absent bank is never driven -- the real chip keeps that window.
+    mhb_build_lut16(lut16, banks, 0x0B, &cfg);   // bank 2 absent
+    CHECK(!(lut16[make_idx(addr, true, false, false)] & MHB_LUT16_DRIVE),
+          "full8k: drives an absent bank");
+    CHECK(lut16[make_idx(addr, false, false, true)] & MHB_LUT16_DRIVE,
+          "full8k: absent bank silenced a present one");
+}
+
+static void test_lut16_static(void) {
+    // The drop-in replacement for a DS5-like socket (pair 0, PR inverted)
+    // holding bank 0: PR high selects it (inverted), PR low belongs to the
+    // pair-mate and must not be driven.
+    mhb_lut16_cfg_t cfg = { .socket_pair = 0, .pr_invert = true,
+                            .use_x1 = false, .fixed_bank = 0 };
+    mhb_build_lut16(lut16, banks, 0x0F, &cfg);
+    unsigned addr = 0x0FE;
+    uint16_t v = lut16[make_idx(addr, false, true, true)];
+    CHECK((v & MHB_LUT16_DRIVE) && (v & 0xFF) == mhb_scramble_data(fill(0, addr)),
+          "static: not serving its bank");
+    CHECK(!(lut16[make_idx(addr, false, false, true)] & MHB_LUT16_DRIVE),
+          "static: drives the pair-mate's PR state");
+    CHECK(!(lut16[make_idx(addr, true, true, true)] & MHB_LUT16_DRIVE),
+          "static: drives with /CS high");
+
+    // Programmer mode: /CS alone gates, PR ignored, same bank both states.
+    cfg.ignore_pr = true;
+    mhb_build_lut16(lut16, banks, 0x0F, &cfg);
+    CHECK((lut16[make_idx(addr, false, false, true)] & 0x1FF)
+          == (mhb_scramble_data(fill(0, addr)) | MHB_LUT16_DRIVE),
+          "static ignore_pr: PR low not served");
+    CHECK((lut16[make_idx(addr, false, true, true)] & 0x1FF)
+          == (mhb_scramble_data(fill(0, addr)) | MHB_LUT16_DRIVE),
+          "static ignore_pr: PR high not served");
+}
+
+static void test_lut8_and_masks(void) {
+    uint8_t *lut8 = malloc(MHB_LUT_SIZE);
+    if (!lut8) { g_failures++; return; }
+    mhb_build_lut8(lut8, banks, 0x0F, 2);
+    for (unsigned addr = 0; addr < 2048; addr += 23) {
+        // Select and X bits must not affect an 8-bit table.
+        CHECK(lut8[make_idx(addr, false, false, true)]
+              == mhb_scramble_data(fill(2, addr)),
+              "lut8 wrong at 0x%03X", addr);
+        CHECK(lut8[make_idx(addr, true, true, false)]
+              == lut8[make_idx(addr, false, false, true)],
+              "lut8 heeds select bits at 0x%03X", addr);
     }
-}
+    mhb_build_lut8(lut8, banks, 0x0B, 2);       // bank absent
+    CHECK(lut8[mhb_index_of(0x10)] == mhb_scramble_data(0xFF),
+          "lut8 absent bank not 0xFF");
+    free(lut8);
 
-static void test_select_masks(void) {
     uint32_t mask, val;
-    mhb_select_masks(true, true, &mask, &val);
-    CHECK(mask == ((1u << GPIO_nCE) | (1u << GPIO_nOE)), "CE+OE mask wrong");
-    CHECK(val == 0, "CE+OE are active low; required value must be 0");
-    mhb_select_masks(false, true, &mask, &val);
-    CHECK(mask == (1u << GPIO_nOE), "OE-only mask wrong");
     mhb_select_masks(false, false, &mask, &val);
-    CHECK(mask == 0 && val == 0, "no-gating must select always");
-    // (in & 0) == 0 for all in: always selected, as documented.
+    CHECK(mask == ((1u << GPIO_nCS) | (1u << GPIO_PR)) && val == 0,
+          "mask: /CS low + PR low wrong");
+    mhb_select_masks(false, true, &mask, &val);
+    CHECK(mask == ((1u << GPIO_nCS) | (1u << GPIO_PR)) && val == (1u << GPIO_PR),
+          "mask: /CS low + PR high wrong");
+    mhb_select_masks(true, false, &mask, &val);
+    CHECK(mask == (1u << GPIO_nCS) && val == 0, "mask: ignore_pr wrong");
 }
 
 int main(void) {
@@ -133,15 +228,16 @@ int main(void) {
             banks[b][a] = fill(b, a);
         }
     }
-    lut = malloc(MHB_LUT_SIZE);
-    if (!lut) return 2;
+    lut16 = malloc(MHB_LUT_SIZE * sizeof(uint16_t));
+    if (!lut16) return 2;
 
     test_pin_map_sanity();
     test_index_roundtrip();
     test_scramble();
-    test_lut_ext();
-    test_lut_fixed();
-    test_select_masks();
+    test_lut16_pair();
+    test_lut16_full8k();
+    test_lut16_static();
+    test_lut8_and_masks();
 
     if (g_failures) {
         printf("%u failure(s)\n", g_failures);
