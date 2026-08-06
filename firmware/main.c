@@ -52,9 +52,14 @@
 #include "pico/multicore.h"
 #include "hardware/structs/sio.h"
 
-#include "board_fire24e.h"
+#include "board.h"
 #include "decode.h"
 #include "rom_images.h"
+
+#if MHB_BOARD_HAS_NEOPIXEL
+#include "hardware/pio.h"
+#include "ws2812.pio.h"
+#endif
 
 // 150 MHz is the RP2350's rated speed, and the loop fits a 2616's access time
 // at it several times over.  The knob exists because the sibling project
@@ -140,10 +145,48 @@ static void setup_gpio(void) {
     gpio_set_dir(GPIO_X2, GPIO_IN);
     gpio_pull_down(GPIO_X2);
 
+#if !MHB_BOARD_HAS_NEOPIXEL
     gpio_init(GPIO_STATUS_LED);
     gpio_set_dir(GPIO_STATUS_LED, GPIO_OUT);
     gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+#endif
 }
+
+#if MHB_BOARD_HAS_NEOPIXEL
+// The rev F status pixel: a WS2812B fed GRB, one word per update, from the
+// firmware's only PIO state machine -- serving stays a CPU loop by design,
+// so PIO0 is otherwise idle and a cosmetic job is welcome to it.
+//
+// Colours are the rev E LED semantics with one improvement the plain LED
+// could not offer: "powered but nothing selecting us" gets its own colour
+// instead of darkness, so a dead machine and a dead board stop looking
+// identical.  Kept dim on purpose; these pixels are floodlights at 0xFF.
+#define NEO_GRB(g, r, b)  (((uint32_t)(g) << 16) | ((uint32_t)(r) << 8) | (b))
+#define NEO_BOOT     NEO_GRB(0x00, 0x00, 0x14)   // blue blip: firmware alive
+#define NEO_SERVING  NEO_GRB(0x14, 0x00, 0x00)   // green: selects arriving
+#define NEO_IDLE     NEO_GRB(0x00, 0x06, 0x00)   // faint red: powered, silent
+#define NEO_OFF      NEO_GRB(0x00, 0x00, 0x00)
+
+static void neo_init(void) {
+    PIO pio = pio0;
+    uint sm = 0;
+    uint off = pio_add_program(pio, &ws2812_program);
+    pio_gpio_init(pio, GPIO_NEOPIXEL);
+    pio_sm_set_consecutive_pindirs(pio, sm, GPIO_NEOPIXEL, 1, true);
+    pio_sm_config c = ws2812_program_get_default_config(off);
+    sm_config_set_sideset_pins(&c, GPIO_NEOPIXEL);
+    sm_config_set_out_shift(&c, false, true, 24);    // MSB first, autopull 24
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    // 10 PIO cycles per bit at 800 kHz.
+    sm_config_set_clkdiv(&c, (float)clock_get_hz(clk_sys) / (800000.0f * 10));
+    pio_sm_init(pio, sm, off, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+
+static void neo_put(uint32_t grb) {
+    pio_sm_put_blocking(pio0, 0, grb << 8u);
+}
+#endif
 
 static unsigned bank_from_jumpers_or(int build_value) {
     if (build_value >= 0) {
@@ -274,8 +317,22 @@ int main(void) {
 
     // Core 0 turns the served-cycle count into something visible.  Installed
     // in a machine that will not boot, the useful question is whether the
-    // board is being selected at all:
-    //
+    // board is being selected at all.
+#if MHB_BOARD_HAS_NEOPIXEL
+    //   blue blip at power-on   firmware started
+    //   green                   selects arriving, serving normally
+    //   faint red               powered but nothing is selecting us
+    neo_init();
+    neo_put(NEO_BOOT);
+    sleep_ms(250);
+    uint32_t last_served = 0;
+    while (true) {
+        uint32_t served = g_served;
+        neo_put(served != last_served ? NEO_SERVING : NEO_IDLE);
+        last_served = served;
+        sleep_ms(100);
+    }
+#else
     //   dark          nothing is selecting us -- no strobes, or no power
     //   fast flicker  serving normally
     //   solid then dark   a burst at boot and then silence, i.e. the machine
@@ -288,4 +345,5 @@ int main(void) {
         last_served = served;
         sleep_ms(100);
     }
+#endif
 }

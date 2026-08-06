@@ -1,0 +1,24 @@
+; WS2812B driver for the rev F status pixel.  The canonical program from
+; pico-examples (BSD-3-Clause, Raspberry Pi (Trading) Ltd), 10 cycles per
+; bit: the C side sets the clock divider for 800 kHz.
+;
+; This is the only PIO in the firmware, and it is cosmetic.  Serving stays
+; a CPU loop on core 1 by design; this state machine belongs to core 0 and
+; a status light.
+
+.program ws2812
+.side_set 1
+
+.define public T1 3
+.define public T2 3
+.define public T3 4
+
+.wrap_target
+bitloop:
+    out x, 1       side 0 [T3 - 1]
+    jmp !x do_zero side 1 [T1 - 1]
+do_one:
+    jmp  bitloop   side 1 [T2 - 1]
+do_zero:
+    nop            side 0 [T2 - 1]
+.wrap

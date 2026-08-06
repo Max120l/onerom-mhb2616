@@ -33,6 +33,10 @@
 
 #define GPIO_X1              9    // jumper pad, not a socket pin
 #define GPIO_X2              8    // jumper pad, not a socket pin
+
+#define MHB_BOARD_NAME  "One ROM Fire 24 rev E"
+#define MHB_BOARD_HAS_NEOPIXEL  0
+
 // Status LED: +3V3 -> R5 (1K) -> anode, cathode -> this pin.  It lights when
 // the pin is driven LOW.
 #define GPIO_STATUS_LED     29

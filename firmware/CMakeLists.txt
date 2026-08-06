@@ -17,6 +17,23 @@ add_executable(mhb2616
     rom_images.c        # generated: tools/gen_rom_images.py
 )
 
+pico_generate_pio_header(mhb2616 ${CMAKE_CURRENT_LIST_DIR}/ws2812.pio)
+
+# Which Fire 24 revision.  The socket map is identical; what differs is the
+# status indicator (rev F: WS2812B pixel on GPIO 29) and the jumper
+# positions -- including the RECOVERY jumper, which is jumper 1 on both
+# boards but a different GPIO (rev E: 25, rev F: 26).  See board.h.
+set(MHB_BOARD "FIRE24E" CACHE STRING "Board: FIRE24E or FIRE24F")
+set_property(CACHE MHB_BOARD PROPERTY STRINGS FIRE24E FIRE24F)
+if(NOT MHB_BOARD MATCHES "^(FIRE24E|FIRE24F)$")
+    message(FATAL_ERROR "MHB_BOARD must be FIRE24E or FIRE24F")
+endif()
+if(MHB_BOARD STREQUAL "FIRE24F")
+    target_compile_definitions(mhb2616 PRIVATE MHB_BOARD_FIRE24F=1)
+else()
+    target_compile_definitions(mhb2616 PRIVATE MHB_BOARD_FIRE24F=0)
+endif()
+
 # Where the bank bits come from.  See main.c for what each means; the short
 # version, keyed to the PMD 85-3 schematic:
 #   STATIC   one 2 KB bank, gated like the original chip -- drop-in
@@ -92,6 +109,7 @@ target_include_directories(mhb2616 PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(mhb2616
     pico_stdlib
     pico_multicore
+    hardware_pio
 )
 
 pico_add_extra_outputs(mhb2616)

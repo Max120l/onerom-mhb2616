@@ -30,7 +30,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "board_fire24e.h"
+#include "board.h"
 #include "rom_images.h"
 
 #define MHB_LUT_SIZE  65536u

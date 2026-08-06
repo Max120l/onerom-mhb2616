@@ -1,4 +1,4 @@
-# Emulating a Tesla MHB 2616 on a One ROM Fire 24 rev E
+# Emulating a Tesla MHB 2616 on a One ROM Fire 24
 
 Firmware that makes an RP2350-based One ROM board behave like a Tesla MHB
 2616 — the Czechoslovak 2 KB PROM in the 2716 footprint — and, from a single
@@ -73,12 +73,14 @@ in [docs/PMD85-3.md](docs/PMD85-3.md).
 
 ### Serving
 
-There is no PIO program in this firmware, and that is the design. A 2616
-has no handshake: address in, data out within the access time, selects
-gating the drivers. Against a 2 MHz 8080 the budget is generous — the
-original parts are ~450 ns chips.
+Serving uses no PIO, and that is the design. A 2616 has no handshake:
+address in, data out within the access time, selects gating the drivers.
+Against a 2 MHz 8080 the budget is generous — the original parts are
+~450 ns chips. (The only PIO in the firmware is cosmetic: rev F's status
+pixel speaks WS2812B.)
 
-The Fire 24 rev E pin map does the decoding for free. The eight data pins
+The Fire 24 pin map — identical on rev E and rev F — does the decoding
+for free. The eight data pins
 land on GPIO 0–7; the eleven address lines, both select pins and the two X
 jumper pads land on GPIO 8–23. So the top 16 bits of a single GPIO read are
 the complete question, and the serve loop is:
@@ -162,11 +164,24 @@ cd tools
 
 # firmware (needs the Pico SDK; PICO_SDK_PATH set)
 cd ../firmware
-cmake -B build -DMHB_BANK_SOURCE=FULL8K -DMHB_SOCKET_PAIR=0 \
-      -DMHB_PR_INVERT=OFF          # per the bank bookkeeping
+cmake -B build -DMHB_BOARD=FIRE24F \
+      -DMHB_BANK_SOURCE=FULL8K -DMHB_SOCKET_PAIR=0 \
+      -DMHB_PR_INVERT=OFF          # per the socket table
 cmake --build build
 # -> build/mhb2616.uf2, flashed over USB with the recovery jumper fitted
 ```
+
+`MHB_BOARD` selects the Fire 24 revision: `FIRE24E` (plain LED, the
+default) or `FIRE24F` (WS2812B status pixel). The socket-to-GPIO map is
+identical between them — the serving design does not change — but two
+human-facing things move, and one of them matters for safety: **the
+recovery jumper is select-jumper 1 on both boards but a different GPIO**
+(rev E: 25, rev F: 26), and on rev F the bank-select jumpers land on the
+SWD pads (GPIO 25/24), so detach any debug probe when the bank comes from
+jumpers. The rev F pixel speaks in colours: blue blip at power-on
+(firmware alive), green (serving), faint red (powered but nothing
+selecting us — distinguishable from a dead board, which a plain LED
+could not offer).
 
 The host tests need no SDK and no hardware:
 
