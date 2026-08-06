@@ -72,11 +72,17 @@ target_compile_definitions(mhb2616 PRIVATE MHB_SOCKET_PAIR=${MHB_SOCKET_PAIR})
 option(MHB_PR_INVERT "PR carries inverted A11 in this socket (DS5/DS7)" OFF)
 target_compile_definitions(mhb2616 PRIVATE MHB_PR_INVERT=$<BOOL:${MHB_PR_INVERT}>)
 
-# STATIC/HOTSPOT: which bank this socket holds, 0-3.  -1 (the default) reads
-# select jumpers 2 and 3 at boot instead.  Note bank bit 1 must agree with
-# the socket's pair and bit 0 with its PR sense -- the checksum test hands
-# you all three together.
-set(MHB_SOCKET_BANK "-1" CACHE STRING "Bank 0-3, or -1 for jumpers")
+# STATIC/HOTSPOT: which bank this socket holds, 0-3.  Build-time only: of
+# the board's four jumpers, two are hard-wired to the SWD pads and cannot
+# be read (confirmed on hardware, see docs/BOARD-NOTES.md) and one of the
+# remaining two is the recovery jumper.  Note bank bit 1 must agree with
+# the socket's pair and bit 0 with its PR sense -- the socket table in
+# docs/PMD85-3.md hands you all three together.
+set(MHB_SOCKET_BANK "0" CACHE STRING "Bank this socket holds, 0-3")
+if(NOT MHB_SOCKET_BANK MATCHES "^[0-3]$")
+    message(FATAL_ERROR "MHB_SOCKET_BANK must be 0, 1, 2 or 3 "
+        "(jumper-selected banks are not available: see docs/BOARD-NOTES.md)")
+endif()
 target_compile_definitions(mhb2616 PRIVATE MHB_SOCKET_BANK=${MHB_SOCKET_BANK})
 
 # STATIC only: ignore PR and answer whenever /CS is active.  For reading the

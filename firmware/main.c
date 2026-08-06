@@ -1,19 +1,20 @@
-// Tesla MHB 2616 emulation on a One ROM Fire 24 rev E, sized for the
-// PMD 85-3's 8 KB monitor.
+// Tesla MHB 2616 emulation on a One ROM Fire 24 (rev E or rev F), sized
+// for the PMD 85-3's 8 KB monitor.
 //
 // A 2616 is the easy shape of chip: address in, data out, selects gating the
 // drivers, no handshake anywhere.  The host asserts its selects, waits its
 // access time (hundreds of nanoseconds against a 2 MHz 8080), and samples.
-// Nothing acknowledges, so unlike the 1801RE2 sibling project there is no
-// PIO program here at all -- just a loop that must always be faster than the
-// chip it replaces:
+// Nothing acknowledges, so unlike the 1801RE2 sibling project serving uses
+// no PIO at all -- just a loop that must always be faster than the chip it
+// replaces:
 //
 //     read GPIO -> index a 64 KB table -> write data, gate directions
 //
-// The Fire 24 rev E pin map makes the middle step free.  Data lands on GPIO
-// 0..7; address, selects and the X pads land on GPIO 8..23.  So the top 16
-// bits of one GPIO read are the complete question, and a table built at boot
-// holds the answer for every one of them, pre-scrambled into drive order.
+// The Fire 24 pin map (identical on both revisions) makes the middle step
+// free.  Data lands on GPIO 0..7; address, selects and the X pads land on
+// GPIO 8..23.  So the top 16 bits of one GPIO read are the complete
+// question, and a table built at boot holds the answer for every one of
+// them, pre-scrambled into drive order.
 // The loop is a handful of instructions, comfortably inside a 2616's access
 // time at 150 MHz.
 //
@@ -26,7 +27,8 @@
 //
 //   STATIC   One 2 KB bank, gated exactly as the original chip in this
 //            socket was (/CS active AND PR selecting this chip).  A drop-in
-//            replacement for one dead 2616; bank by jumpers or build flag.
+//            replacement for one dead 2616; bank fixed at build time (the
+//            board has no jumper free to carry it -- see the board header).
 //   PAIR     Both banks of this socket's pair, bank bit from PR.  Replaces
 //            two chips with zero wires; the pair-mate must come out.
 //   FULL8K   All four banks from one socket: one flying lead brings the
@@ -188,14 +190,6 @@ static void neo_put(uint32_t grb) {
 }
 #endif
 
-static unsigned bank_from_jumpers_or(int build_value) {
-    if (build_value >= 0) {
-        return (unsigned)build_value & 3;
-    }
-    return (jumper_fitted(GPIO_BANK_JUMPER_0) ? 1u : 0u)
-         | (jumper_fitted(GPIO_BANK_JUMPER_1) ? 2u : 0u);
-}
-
 static void build_tables(void) {
 #if MHB_BANK_HOTSPOT
     for (unsigned b = 0; b < MHB_BANKS; b++) {
@@ -213,10 +207,9 @@ static void build_tables(void) {
     // Gate as the original chip in this socket would: /CS active and PR at
     // the level that selects this socket's bank.  bank bit 0 XOR the
     // socket's PR inversion gives the level PR reads when selected.
-    unsigned bank = bank_from_jumpers_or(MHB_SOCKET_BANK);
+    unsigned bank = MHB_SOCKET_BANK & 3u;
     bool pr_high = ((bank & 1) ^ (MHB_PR_INVERT ? 1u : 0u)) != 0;
     mhb_select_masks(false, pr_high, &g_sel_mask, &g_sel_val);
-    (void)bank;
 #else
     mhb_lut16_cfg_t cfg = {
         .socket_pair = MHB_SOCKET_PAIR,
@@ -226,7 +219,7 @@ static void build_tables(void) {
         .ignore_pr   = false,
     };
 #if MHB_BANK_STATIC
-    cfg.fixed_bank = (int)bank_from_jumpers_or(MHB_SOCKET_BANK);
+    cfg.fixed_bank = (int)(MHB_SOCKET_BANK & 3u);
     cfg.socket_pair = ((unsigned)cfg.fixed_bank >> 1) & 1;
     cfg.ignore_pr = MHB_STATIC_IGNORE_PR;
 #endif

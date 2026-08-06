@@ -1,7 +1,14 @@
 __pycache__/
 *.pyc
-firmware/rom_images.c
-firmware/build/
-firmware/build-*/
-test/build/
 .pytest_cache/
+
+# Generated image source
+firmware/rom_images.c
+
+# Any out-of-source build tree, whatever it is named -- cmake -B <dir>
+# leaves a CMakeCache.txt and a _deps clone of picotool in it, and those
+# must never reach the repository.
+**/build/
+**/build-*/
+**/b-*/
+firmware/cmake-build*/

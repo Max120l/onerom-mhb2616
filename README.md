@@ -7,15 +7,18 @@ monitor.
 
 Target machine: **Tesla PMD 85-3**, whose 8 KB monitor lives in four 2616s.
 
-**Status: designed against the machine's schematic, host-tested, not yet run
-on hardware — and every pre-hardware question is now closed.** The socket
-wiring is read directly off the PMD 85-3 CPU board schematic (DOSKA CPU,
-1 PK 280 77), and it reshaped the firmware in the machine's favour:
+**Status: serving verified on hardware; not yet run in the machine.** A
+rev F board flashed with the selftest image and read back through a 2716
+programmer returns every bank byte-perfect — all eleven address lines,
+all eight data lines, both bit scrambles and the /CS gating confirmed on
+real silicon. The socket wiring is read directly off the PMD 85-3 CPU
+board schematic (DOSKA CPU, 1 PK 280 77), and it reshaped the firmware in
+the machine's favour:
 **two chips replaceable with zero wires, all four with one**. The
 bank-to-socket assignment is settled byte-for-byte from the Infoserver ROM
 archive (DS4 "E" = bank 0 … DS7 "B" = bank 3; full table with build
-switches in [docs/PMD85-3.md](docs/PMD85-3.md)). Next stop is a bench,
-per the roadmap. This is a sibling
+switches in [docs/PMD85-3.md](docs/PMD85-3.md)). Next stop is the
+machine. This is a sibling
 of [onerom-1801re2](https://github.com/Max120l/onerom-1801re2) and inherits
 its habit: what has been verified is stated as fact, everything else as a
 question.
@@ -80,9 +83,8 @@ Against a 2 MHz 8080 the budget is generous — the original parts are
 pixel speaks WS2812B.)
 
 The Fire 24 pin map — identical on rev E and rev F — does the decoding
-for free. The eight data pins
-land on GPIO 0–7; the eleven address lines, both select pins and the two X
-jumper pads land on GPIO 8–23. So the top 16 bits of a single GPIO read are
+for free. The eight data pins land on GPIO 0–7; the eleven address lines,
+both select pins and the two X jumper pads land on GPIO 8–23. So the top 16 bits of a single GPIO read are
 the complete question, and the serve loop is:
 
 ```
@@ -104,7 +106,7 @@ from", chosen at build time:
 
 | mode | wires | replaces | how |
 |------|-------|----------|-----|
-| `STATIC` (default) | 0 | one chip | Gated exactly as the original: /CS active and PR at this chip's level. Bank by jumpers or build flag. |
+| `STATIC` (default) | 0 | one chip | Gated exactly as the original: /CS active and PR at this chip's level. Bank set at build time. |
 | `PAIR` | 0 | two chips | /CS gates, PR *is* the bank bit. The pair-mate must come out. |
 | `FULL8K` | 1 | all four | One flying lead: the other pair's /CS (pin 20 of either empty socket) to the X1 pad. A12 = which select is active, A11 = PR. All three others out. |
 | `HOTSPOT` | 0 | one chip, four images | Reads of four magic addresses switch images — for software written to touch them. **The stock monitor never will**; this mode is for custom/diagnostic ROMs. |
@@ -146,9 +148,10 @@ Carried over from the sibling project, because they were earned there:
    table — worth doing once if any chip will stay in service.)
 2. **Flash the selftest image first** (`gen_rom_images.py --selftest`),
    read the board through a 2716 programmer (build with
-   `-DMHB_STATIC_IGNORE_PR=ON`, never in a machine), and run
-   `check_selftest.py` on the dump — it names the failing address or data
-   line rather than merely failing. Only then flash a monitor image.
+   `-DMHB_STATIC_IGNORE_PR=ON` and `-DMHB_SOCKET_BANK=<n>`, never in a
+   machine), and run `check_selftest.py` on the dump — it names the
+   failing address or data line rather than merely failing. Only then
+   flash a monitor image. **Done on rev F for all four banks: clean.**
 3. **Every original the board answers for must come out.** One chip for
    `STATIC`/`HOTSPOT`, the pair for `PAIR`, all four for `FULL8K`.
 4. **Climb the ladder in order** — STATIC before PAIR before FULL8K, per
@@ -178,13 +181,14 @@ are addressed by the letters printed on the board's underside, which are
 the same on both revisions even though the GPIOs behind them differ
 (verified at PCB-netlist level; the board headers carry the full table):
 
-- **Jumper A = recovery.** Fit it and power on to reach the bootrom's
-  USB flash mode. It is the column next to the X1 pad, far end from the
-  5V/GND header.
-- **Jumpers B and C = bank select** (B = bit 0, C = bit 1) in
-  STATIC/HOTSPOT. C doubles as SWCLK on both boards — detach any debug
-  probe, or pin the bank with `-DMHB_SOCKET_BANK`. D is not used by this
-  firmware: it pairs with the RUN (reset) net.
+- **Jumper A = recovery**, and it is the only jumper this firmware reads.
+  Fit it and power on to reach the bootrom's USB flash mode.
+- **B, C, D are unused.** C and D cannot be read at all — they are the
+  board's BOOT/RUN + SWD pads doing double duty, and the SWD pins' own
+  internal pulls defeat the detection (confirmed on hardware, see
+  [docs/BOARD-NOTES.md](docs/BOARD-NOTES.md)). That leaves too few
+  jumpers for a bank number, so **the bank is a build-time constant**
+  (`-DMHB_SOCKET_BANK=0..3`).
 - **X1** is the FULL8K flying-lead pad; X2 is unused.
 
 The rev F pixel speaks in colours: blue blip at power-on (firmware

@@ -21,15 +21,22 @@ reference CRCs for `monit3.rom` and `monit3B.rom` (they differ in banks
 0 and 3 only). No chip dumps were needed — which is fortunate, because
 the target machine's four originals are all bad.
 
-## 3. Bench selftest through a ROM reader
+## ~~3. Bench selftest through a ROM reader~~ — PASSED on a rev F
 
 **Question: do the scrambles on real silicon match the ones the host tests
-prove?**
+prove?  Answer: yes, exactly.**
 
-STATIC + `MHB_STATIC_IGNORE_PR=ON`, selftest image, all four bank settings,
-read as a 2716 in any programmer. `check_selftest.py` clean × 4 opens the
-gate. A failure here is a mapping bug and cheap to find; the same failure
-discovered in-circuit would be expensive.
+A rev F board, selftest image, read back through a 2716 programmer, all
+four banks: `check_selftest.py` clean on every one — every address line,
+every data line, both bit scrambles and the /CS gating confirmed against
+real hardware. Nothing on the serving path is now unverified outside a
+machine.
+
+The run also found a board-level fault that had nothing to do with
+serving: two of the four jumpers cannot be read at all, because they are
+the BOOT/RUN + SWD pads doing double duty and the SWD pins' own internal
+pulls defeat the detection. The bank is a build-time constant now; see
+docs/BOARD-NOTES.md for the netlist evidence and the hardware symptom.
 
 ## 4. STATIC replacement in a running machine
 

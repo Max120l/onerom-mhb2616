@@ -45,32 +45,27 @@
 #define GPIO_SEL_JUMPERS  { 25, 24, 26, 27 }
 
 // The jumper block, in the letters printed on the board's underside.
-// Verified against the rev E PCB netlist (pad positions vs silkscreen):
+// Verified against the rev E PCB netlist, and the C column's behaviour
+// confirmed on hardware -- see docs/BOARD-NOTES.md.
 //
-//   label   GPIO   closed jumper ties to   shared with
-//     A      25    GND                     --
-//     B      24    GND                     --
-//     C      26    GND                     SWCLK (BOOT pad beside it)
-//     D      27    RUN (reads high)        SWDIO
+//   label  GPIO  closed jumper ties to  also wired to    usable?
+//     A     25   GND                    --               yes
+//     B     24   GND                    --               yes
+//     C     26   BOOT (via R2/QSPI_SS)  SWCLK (MCU p23)  NO
+//     D     27   RUN  (10K to +3V3)     SWDIO (MCU p25)  NO
 //
-// jumper_fitted() in main.c detects a pin held at either rail, so the
-// A/B/C-low vs D-high difference never reaches the logic.
+// C and D are each hard-wired to a second MCU pin -- the SWD pads -- whose
+// own internal pull fights any pull we apply, so jumper_fitted() cannot
+// read them.  On hardware, C read as permanently fitted.  Only A and B
+// are clean shorts to ground, and A is the recovery jumper, which leaves
+// exactly one free jumper.  The bank therefore comes from the build, not
+// from jumpers; see MHB_SOCKET_BANK.
 
-// Jumper A, reused as a recovery jumper, exactly as in the 1801RE2
-// firmware.  This firmware carries no USB stack, so flashing it replaces
-// One ROM's picoboot, and the board exposes no BOOTSEL button -- without
-// an escape hatch the only way back would be SWD.  Fit jumper A and power
-// on: the board goes to the bootrom's USB mode instead of touching the
-// bus at all.
+// Jumper A, the recovery jumper.  This firmware carries no USB stack, so
+// flashing it replaces One ROM's picoboot, and the board exposes no
+// BOOTSEL button.  Fit jumper A and power on: the board goes to the
+// bootrom's USB mode instead of touching the bus at all.
 #define GPIO_RECOVERY_JUMPER  25
-
-// Jumpers B and C, read once at boot as a bank number in the modes that
-// need one (STATIC, HOTSPOT): B is bit 0, C is bit 1, fitted = 1.
-// Ignored by the other bank sources.  C doubles as SWCLK, so detach any
-// debug probe when the bank comes from jumpers; D is avoided entirely --
-// it pairs with the RUN (reset) net.
-#define GPIO_BANK_JUMPER_0   24
-#define GPIO_BANK_JUMPER_1   26
 
 // ---------------------------------------------------------------------------
 // MHB 2616 chip pinout, as wired in the PMD 85-3
