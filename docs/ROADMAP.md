@@ -26,11 +26,15 @@ the target machine's four originals are all bad.
 **Question: do the scrambles on real silicon match the ones the host tests
 prove?  Answer: yes, exactly.**
 
-A rev F board, selftest image, read back through a 2716 programmer, all
-four banks: `check_selftest.py` clean on every one — every address line,
-every data line, both bit scrambles and the /CS gating confirmed against
-real hardware. Nothing on the serving path is now unverified outside a
-machine.
+A rev F board, selftest image, read back through a 2716 programmer:
+**all four banks clean, each matching only its own bank.** Every address
+line, every data line, both bit scrambles and the /CS gating confirmed
+against real hardware. Nothing on the serving path is unverified outside
+a machine now.
+
+It took two passes. The first used jumper-selected banks and returned
+only two distinct images — which is how the jumper fault below was
+found; the second pinned each bank at build time and swept all four.
 
 The run also found a board-level fault that had nothing to do with
 serving: two of the four jumpers cannot be read at all, because they are
@@ -42,9 +46,23 @@ docs/BOARD-NOTES.md for the netlist evidence and the hardware symptom.
 
 **Question: does the machine accept the board as one of its four chips?**
 
-The first hardware milestone with user value: a 2616 replacement, dead chip
-out, board in, bank per step 2. The -3's own startup ROM test is the
-acceptance test.
+The first hardware milestone with user value: a 2616 replacement, dead
+chip out, board in, `-DMHB_SOCKET_BANK=<n>` and `-DMHB_PR_INVERT=<...>`
+per the socket table in docs/PMD85-3.md. The -3's own startup ROM test is
+the acceptance test.
+
+Worth knowing before it is attempted on this machine: **all four of its
+originals are bad**, so a STATIC board fixes one quarter of a monitor
+that is broken in four places — the machine will still fail its ROM test
+on the other three. The rung is therefore diagnostic rather than
+restorative here: it proves the board serves correctly in-circuit (levels,
+timing, /CS and PR gating live) while only one socket is in play, which
+is the variable worth isolating before three more join it. Watch the
+status pixel, not the screen: green means the machine is reading us.
+
+If the goal is simply a working machine, skipping to rung 6 (FULL8K,
+which replaces all four at once) is legitimate — but a failure there has
+four times the surface to search.
 
 ## 5. PAIR: two chips from one socket, zero wires
 
