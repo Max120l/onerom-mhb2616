@@ -59,7 +59,9 @@
 // ---------------------------------------------------------------------------
 //
 // From the DOSKA CPU schematic (1 PK 280 77, PRE TYP PMD 85-3), sockets
-// DS4 (E), DS5 (D), DS6 (0), DS7 (B):
+// DS4 (E), DS5 (D), DS6 (C), DS7 (B) -- the schematic prints DS6's letter
+// as "0", but the real machine's socket is labelled C; one of several
+// typos spotted on the sheet:
 //
 //   pin  signal          pin  signal          pin  signal
 //    1   A7               9   D0              17   D7
