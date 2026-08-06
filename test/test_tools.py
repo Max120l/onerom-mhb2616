@@ -125,3 +125,44 @@ def test_checksum_compare(tmp_path):
         [sys.executable, str(TOOLS / "rom_checksum.py"), "--compare",
          str(a), str(a)], capture_output=True, text=True)
     assert res.returncode == 0
+
+
+def _distinct_banks():
+    # Four banks different enough that identification gaps are wide.
+    return [bytes((i * 7 + b * 53 + 11) & 0xFF for i in range(2048)) for b in range(4)]
+
+
+def run_checksum(*args):
+    return subprocess.run(
+        [sys.executable, str(TOOLS / "rom_checksum.py"), *map(str, args)],
+        capture_output=True, text=True)
+
+
+def test_identify_exact_and_degraded(tmp_path):
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+
+    clean = tmp_path / "clean.bin"
+    clean.write_bytes(banks[2])
+    dying = bytearray(banks[1])
+    for i in range(0, 400, 3):          # ~130 corrupt bytes: a failing chip
+        dying[i] ^= 0xA5
+    bad = tmp_path / "dying.bin"
+    bad.write_bytes(bytes(dying))
+
+    res = run_checksum("--identify", ref, clean, bad)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "-> bank 2, exact" in res.stdout
+    assert "-> bank 1, with" in res.stdout
+
+
+def test_identify_rejects_garbage(tmp_path):
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+    junk = tmp_path / "junk.bin"
+    junk.write_bytes(bytes((i * 251 + 17) & 0xFF for i in range(2048)))
+    res = run_checksum("--identify", ref, junk)
+    assert res.returncode == 1
+    assert "no clear match" in res.stdout
