@@ -166,6 +166,47 @@ static void test_lut16_full8k(void) {
           "full8k: absent bank silenced a present one");
 }
 
+// The whole FULL8K story in one sweep: for every address of the 8 KB
+// monitor, does a socket-eye view of that access -- 11 address lines,
+// PR = A11, one of the two pair selects low -- return the right byte?
+//
+// The spot checks above test the table; this tests the *mapping onto the
+// machine*, which is where a wrong socket_pair or pr_invert would show up
+// as a monitor served in the wrong order.  Modelled on a DS4 board:
+// pair 0, PR straight, X1 carrying the other pair's select.
+static void test_full8k_sweep(void) {
+    mhb_lut16_cfg_t cfg = { .socket_pair = 0, .pr_invert = false,
+                            .use_x1 = true, .fixed_bank = -1 };
+    mhb_build_lut16(lut16, banks, 0x0F, &cfg);
+
+    unsigned wrong = 0, silent = 0;
+    for (unsigned off = 0; off < 4 * MHB_BANK_SIZE; off++) {
+        unsigned a   = off & 0x7FF;
+        unsigned a11 = (off >> 11) & 1;
+        unsigned a12 = (off >> 12) & 1;
+        // Active low: the selected pair's line is low, the other idle high.
+        uint16_t idx = mhb_index_of(a) | (a11 ? MHB_IDX_PR : 0)
+                     | (a12 ? MHB_IDX_nCS : MHB_IDX_X1);
+        uint16_t v = lut16[idx];
+        if (!(v & MHB_LUT16_DRIVE)) {
+            silent++;
+        } else if ((v & 0xFF) != mhb_scramble_data(fill(off / MHB_BANK_SIZE, a))) {
+            wrong++;
+        }
+    }
+    CHECK(silent == 0, "full8k sweep: %u monitor addresses not served", silent);
+    CHECK(wrong == 0, "full8k sweep: %u monitor addresses served wrong", wrong);
+
+    // ...and nothing at all when neither pair is selected.
+    unsigned drove = 0;
+    for (unsigned off = 0; off < 4 * MHB_BANK_SIZE; off++) {
+        uint16_t idx = mhb_index_of(off & 0x7FF) | MHB_IDX_nCS | MHB_IDX_X1
+                     | ((off & 0x800) ? MHB_IDX_PR : 0);
+        if (lut16[idx] & MHB_LUT16_DRIVE) drove++;
+    }
+    CHECK(drove == 0, "full8k sweep: drove %u addresses with no select", drove);
+}
+
 static void test_lut16_static(void) {
     // The drop-in replacement for a DS5-like socket (pair 0, PR inverted)
     // holding bank 0: PR high selects it (inverted), PR low belongs to the
@@ -236,6 +277,7 @@ int main(void) {
     test_scramble();
     test_lut16_pair();
     test_lut16_full8k();
+    test_full8k_sweep();
     test_lut16_static();
     test_lut8_and_masks();
 
