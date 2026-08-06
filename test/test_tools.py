@@ -1,0 +1,127 @@
+"""Tests for the image tools: generation round-trips, selftest diagnosis."""
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+TOOLS = Path(__file__).resolve().parent.parent / "tools"
+sys.path.insert(0, str(TOOLS))
+
+import selftest            # noqa: E402
+import check_selftest      # noqa: E402
+
+
+def run_gen(tmp_path, *args):
+    out = tmp_path / "rom_images.c"
+    res = subprocess.run(
+        [sys.executable, str(TOOLS / "gen_rom_images.py"), "-o", str(out), *args],
+        capture_output=True, text=True)
+    return res, out
+
+
+def parse_banks(text):
+    """The four 2048-byte banks back out of the generated C."""
+    body = text[text.index("mhb_banks"):]
+    body = "\n".join(l for l in body.splitlines() if not l.strip().startswith("//"))
+    rows = re.findall(r"0x([0-9A-F]{2})\b", body)
+    data = bytes(int(h, 16) for h in rows)
+    assert len(data) == 4 * 2048
+    return [data[b * 2048:(b + 1) * 2048] for b in range(4)]
+
+
+def parse_present(text):
+    return int(re.search(r"mhb_bank_present = 0x([0-9A-F]{2})", text).group(1), 16)
+
+
+def test_monitor_split(tmp_path):
+    image = bytes((i * 31 + 7) & 0xFF for i in range(8192))
+    src = tmp_path / "monitor.bin"
+    src.write_bytes(image)
+    res, out = run_gen(tmp_path, "--monitor", str(src))
+    assert res.returncode == 0, res.stderr
+    banks = parse_banks(out.read_text())
+    for b in range(4):
+        assert banks[b] == image[b * 2048:(b + 1) * 2048]
+    assert parse_present(out.read_text()) == 0x0F
+
+
+def test_partial_chip_set(tmp_path):
+    dump = bytes(range(256)) * 8
+    src = tmp_path / "mz3.bin"
+    src.write_bytes(dump)
+    res, out = run_gen(tmp_path, "--bank", "2", str(src))
+    assert res.returncode == 0, res.stderr
+    text = out.read_text()
+    banks = parse_banks(text)
+    assert banks[2] == dump
+    assert banks[0] == bytes([0xFF]) * 2048
+    assert parse_present(text) == 0x04
+
+
+def test_wrong_size_rejected(tmp_path):
+    src = tmp_path / "short.bin"
+    src.write_bytes(b"\x00" * 100)
+    res, _ = run_gen(tmp_path, str(src))
+    assert res.returncode != 0
+    res, _ = run_gen(tmp_path, "--monitor", str(src))
+    assert res.returncode != 0
+
+
+def test_selftest_emit_and_check(tmp_path):
+    res, out = run_gen(tmp_path, "--selftest")
+    assert res.returncode == 0, res.stderr
+    banks = parse_banks(out.read_text())
+    for b in range(4):
+        assert banks[b] == selftest.image(b)
+        assert not check_selftest.check_bank(banks[b], b)
+
+
+def test_selftest_marker_disambiguates_banks():
+    # No byte pair is valid for two different (bank, word) pairs.
+    seen = {}
+    for b in range(4):
+        img = selftest.image(b)
+        for a in range(0, 2048, 2):
+            pair = (img[a], img[a + 1])
+            assert pair not in seen, f"pair collision {seen[pair]} vs {(b, a)}"
+            seen[pair] = (b, a)
+
+
+def test_check_selftest_diagnoses_stuck_data_line():
+    img = bytearray(selftest.image(1))
+    for a in range(len(img)):
+        img[a] |= 0x08          # D3 stuck high
+    bad = check_selftest.check_bank(bytes(img), 1)
+    assert bad
+    # Every mismatch differs in D3.
+    assert all((got ^ want) & 0x08 for _, got, want in bad)
+
+
+def test_check_selftest_clean_roundtrip(tmp_path, capsys):
+    img = selftest.image(0) + selftest.image(1) + selftest.image(2) + selftest.image(3)
+    dump = tmp_path / "all.bin"
+    dump.write_bytes(img)
+    res = subprocess.run(
+        [sys.executable, str(TOOLS / "check_selftest.py"), str(dump)],
+        capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert res.stdout.count("clean") == 4
+
+
+def test_checksum_compare(tmp_path):
+    a = tmp_path / "a.bin"
+    b = tmp_path / "b.bin"
+    a.write_bytes(bytes(2048))
+    b.write_bytes(bytes(2047) + b"\x01")
+    res = subprocess.run(
+        [sys.executable, str(TOOLS / "rom_checksum.py"), "--compare",
+         str(a), str(b)], capture_output=True, text=True)
+    assert res.returncode == 1
+    assert "0x07FF" in res.stdout
+    res = subprocess.run(
+        [sys.executable, str(TOOLS / "rom_checksum.py"), "--compare",
+         str(a), str(a)], capture_output=True, text=True)
+    assert res.returncode == 0
