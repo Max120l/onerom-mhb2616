@@ -87,6 +87,19 @@ static_assert(MHB_HOTSPOT_BASE + 4 <= MHB_BANK_SIZE, "hotspots beyond window");
 // torn read costs nothing but a slightly wrong blink, so no synchronisation.
 static volatile uint32_t g_served;
 
+#ifndef MHB_DIAG
+#define MHB_DIAG 0
+#endif
+
+#if MHB_DIAG
+// One bit per bank the machine has actually asked us for since power-on.
+// Set-only, so the worst a race can do is delay a bit's appearance by one
+// frame.  This is the instrument that turns "it does not boot" into a
+// sentence: a machine reading banks 0 and 1 and never 2 or 3 has a
+// FULL8K board whose X1 lead is not delivering the other pair's select.
+static volatile uint8_t g_bank_seen;
+#endif
+
 #if MHB_BANK_HOTSPOT
 static uint8_t g_lut8[MHB_BANKS][MHB_LUT_SIZE];
 static uint16_t g_hs_idx[MHB_BANKS];
@@ -284,6 +297,11 @@ static void __not_in_flash_func(serve_forever)(void) {
                 sio_hw->gpio_oe_set = 0xFFu;
                 driving = true;
                 g_served++;
+#if MHB_DIAG
+                // The bank is already in the word we looked up; see decode.h.
+                g_bank_seen |= (uint8_t)(1u << ((v & MHB_LUT16_BANK_MASK)
+                                                >> MHB_LUT16_BANK_SHIFT));
+#endif
             }
         } else if (driving) {
             sio_hw->gpio_oe_clr = 0xFFu;
@@ -307,6 +325,58 @@ int main(void) {
     build_tables();
 
     multicore_launch_core1(serve_forever);
+
+#if MHB_DIAG
+    // Coverage frame: which banks has this machine actually read?
+    //
+    // A board that does not boot a machine gives one bit of information.
+    // This gives four, and they are the four that separate the candidate
+    // faults: a FULL8K board whose X1 lead is not delivering the other
+    // pair's select serves banks 0 and 1 and never 2 or 3, and says so
+    // here rather than as a machine that sits there.
+    //
+    //   blue, long        start of frame
+    //   then four pulses, bank 0 first:
+    //     green, long     this bank has been read since power-on
+    //     red, short      never read
+    //
+    // Latched since power-on, never cleared: "did this ever happen" is the
+    // question, and a frame that changes between repeats is itself worth
+    // seeing (the machine got further this time).
+#if MHB_BOARD_HAS_NEOPIXEL
+    neo_init();
+#endif
+    while (true) {
+        uint8_t seen = g_bank_seen;
+#if MHB_BOARD_HAS_NEOPIXEL
+        neo_put(NEO_BOOT);
+        sleep_ms(1500);
+        neo_put(NEO_OFF);
+        sleep_ms(600);
+        for (unsigned b = 0; b < MHB_BANKS; b++) {
+            bool hit = (seen >> b) & 1;
+            neo_put(hit ? NEO_SERVING : NEO_GRB(0x00, 0x14, 0x00));
+            sleep_ms(hit ? 700 : 150);
+            neo_put(NEO_OFF);
+            sleep_ms(400);
+        }
+        sleep_ms(1200);
+#else
+        // Plain LED: the same frame, long/short, with a lit marker.
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+        sleep_ms(1500);
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+        sleep_ms(600);
+        for (unsigned b = 0; b < MHB_BANKS; b++) {
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+            sleep_ms(((seen >> b) & 1) ? 700 : 100);
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+            sleep_ms(400);
+        }
+        sleep_ms(1200);
+#endif
+    }
+#endif // MHB_DIAG
 
     // Core 0 turns the served-cycle count into something visible.  Installed
     // in a machine that will not boot, the useful question is whether the

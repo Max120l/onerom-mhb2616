@@ -103,6 +103,13 @@ if(MHB_HOTSPOT_BASE)
     target_compile_definitions(mhb2616 PRIVATE MHB_HOTSPOT_BASE=${MHB_HOTSPOT_BASE})
 endif()
 
+# Diagnostic build: instead of the ordinary status light, blink a frame
+# saying which of the four banks the machine has actually read since
+# power-on.  Off by default -- a board left in a machine should be a ROM
+# and nothing else.  See main.c for how to read the frame.
+option(MHB_DIAG "Blink per-bank coverage instead of the status light" OFF)
+target_compile_definitions(mhb2616 PRIVATE MHB_DIAG=$<BOOL:${MHB_DIAG}>)
+
 # System clock in kHz.  150000 is the RP2350's rated speed and the default;
 # the serve loop fits a 2616's access time at it several times over.
 set(MHB_SYS_CLK_KHZ "" CACHE STRING "System clock in kHz (default 150000)")

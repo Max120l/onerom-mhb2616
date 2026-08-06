@@ -76,7 +76,8 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
         }
 
         uint8_t byte = ((present >> bank) & 1) ? banks[bank][addr] : 0xFF;
-        lut[idx] = mhb_scramble_data(byte) | (drive ? MHB_LUT16_DRIVE : 0);
+        lut[idx] = mhb_scramble_data(byte) | (drive ? MHB_LUT16_DRIVE : 0)
+                 | ((bank & 3u) << MHB_LUT16_BANK_SHIFT);
     }
 }
 

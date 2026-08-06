@@ -62,6 +62,13 @@ uint8_t mhb_scramble_data(uint8_t byte);
 
 #define MHB_LUT16_DRIVE  0x100u
 
+// Bits 9-10 carry the bank the entry came from.  Free real estate in a
+// 16-bit entry, and it means a diagnostic build can record which banks the
+// machine has actually asked for without computing anything on the serving
+// path -- the answer is already in the word it just looked up.
+#define MHB_LUT16_BANK_SHIFT  9
+#define MHB_LUT16_BANK_MASK   (3u << MHB_LUT16_BANK_SHIFT)
+
 typedef struct {
     // Which pair this socket's /CS belongs to: 0 = banks 0/1, 1 = banks 2/3.
     // Which pair is which is set by the mainboard's decoder and confirmed by

@@ -205,6 +205,18 @@ static void test_full8k_sweep(void) {
         if (lut16[idx] & MHB_LUT16_DRIVE) drove++;
     }
     CHECK(drove == 0, "full8k sweep: drove %u addresses with no select", drove);
+
+    // The bank tag the diagnostic build reads must name the same bank the
+    // byte came from -- otherwise a coverage frame would confidently
+    // report the wrong thing, which is worse than not reporting.
+    for (unsigned off = 0; off < 4 * MHB_BANK_SIZE; off += 37) {
+        unsigned a = off & 0x7FF, a11 = (off >> 11) & 1, a12 = (off >> 12) & 1;
+        uint16_t v = lut16[mhb_index_of(a) | (a11 ? MHB_IDX_PR : 0)
+                           | (a12 ? MHB_IDX_nCS : MHB_IDX_X1)];
+        unsigned tag = (v & MHB_LUT16_BANK_MASK) >> MHB_LUT16_BANK_SHIFT;
+        CHECK(tag == off / MHB_BANK_SIZE,
+              "bank tag says %u, byte came from %u", tag, off / MHB_BANK_SIZE);
+    }
 }
 
 static void test_lut16_static(void) {
