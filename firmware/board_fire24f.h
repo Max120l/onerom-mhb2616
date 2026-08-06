@@ -40,19 +40,31 @@
 #define MHB_BOARD_HAS_NEOPIXEL  1
 #define GPIO_NEOPIXEL       29
 
-// Image-select jumper 1, reused as the recovery jumper exactly as on rev E
-// -- fit it and power on to reach the bootrom's USB mode.  Note it is a
-// DIFFERENT physical position than rev E's GPIO 25: on rev F, jumper 1 is
-// GPIO 26.
+// The jumper block, in the letters printed on the board's underside --
+// the SAME letters as rev E, but different GPIOs behind them.  Verified
+// against the rev F PCB netlist (pad positions vs silkscreen); note the
+// rev F schematic's SEL_x net names are stale relative to the silkscreen
+// and must not be used to identify jumpers.
+//
+//   label   GPIO   closed jumper ties to   shared with
+//     A      26    GND                     --
+//     B      27    GND                     --
+//     C      25    GND                     SWCLK (BOOT pad beside it)
+//     D      24    RUN (reads high)        SWDIO
+//
+// jumper_fitted() in main.c detects a pin held at either rail, so the
+// A/B/C-low vs D-high difference never reaches the logic.
+
+// Jumper A -- same letter as rev E's recovery jumper, different GPIO.
+// Fit it and power on to reach the bootrom's USB mode.
 #define GPIO_RECOVERY_JUMPER  26
 
-// Select jumpers in positions 3 and 4 ("4" and "8"), read once at boot as a
-// bank number in STATIC/HOTSPOT: GPIO 25 is bit 0, GPIO 24 is bit 1,
-// fitted = 1.  These pads double as SWD on rev F; with a debug probe
-// attached SWDIO may be driven and read as a fitted jumper, so detach the
-// probe (or use -DMHB_SOCKET_BANK) when the bank comes from jumpers.
-#define GPIO_BANK_JUMPER_0   25
-#define GPIO_BANK_JUMPER_1   24
+// Jumpers B and C, read once at boot as a bank number in STATIC/HOTSPOT:
+// B is bit 0, C is bit 1, fitted = 1.  C doubles as SWCLK, so detach any
+// debug probe when the bank comes from jumpers (or pin the bank with
+// -DMHB_SOCKET_BANK); D is avoided entirely -- it pairs with RUN.
+#define GPIO_BANK_JUMPER_0   27
+#define GPIO_BANK_JUMPER_1   25
 
 // ---------------------------------------------------------------------------
 // MHB 2616 signal assignment: identical to rev E -- see board_fire24e.h for

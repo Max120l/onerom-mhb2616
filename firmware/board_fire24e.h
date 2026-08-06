@@ -44,19 +44,33 @@
 #define STATUS_LED_OFF       1
 #define GPIO_SEL_JUMPERS  { 25, 24, 26, 27 }
 
-// Image-select jumper 0, reused as a recovery jumper, exactly as in the
-// 1801RE2 firmware.  This firmware carries no USB stack, so flashing it
-// replaces One ROM's picoboot, and the board exposes no BOOTSEL button --
-// without an escape hatch the only way back would be SWD on the jumper 2/3
-// pads.  Fit this jumper and power on: the board goes to the bootrom's USB
-// mode instead of touching the bus at all.
+// The jumper block, in the letters printed on the board's underside.
+// Verified against the rev E PCB netlist (pad positions vs silkscreen):
+//
+//   label   GPIO   closed jumper ties to   shared with
+//     A      25    GND                     --
+//     B      24    GND                     --
+//     C      26    GND                     SWCLK (BOOT pad beside it)
+//     D      27    RUN (reads high)        SWDIO
+//
+// jumper_fitted() in main.c detects a pin held at either rail, so the
+// A/B/C-low vs D-high difference never reaches the logic.
+
+// Jumper A, reused as a recovery jumper, exactly as in the 1801RE2
+// firmware.  This firmware carries no USB stack, so flashing it replaces
+// One ROM's picoboot, and the board exposes no BOOTSEL button -- without
+// an escape hatch the only way back would be SWD.  Fit jumper A and power
+// on: the board goes to the bootrom's USB mode instead of touching the
+// bus at all.
 #define GPIO_RECOVERY_JUMPER  25
 
-// Select jumpers 2 and 3, read once at boot as a bank number in the modes
-// that need one (STATIC, HOTSPOT): jumper 2 is bit 0, jumper 3 is bit 1,
-// fitted = 1.  Ignored by the other bank sources.
-#define GPIO_BANK_JUMPER_0   26
-#define GPIO_BANK_JUMPER_1   27
+// Jumpers B and C, read once at boot as a bank number in the modes that
+// need one (STATIC, HOTSPOT): B is bit 0, C is bit 1, fitted = 1.
+// Ignored by the other bank sources.  C doubles as SWCLK, so detach any
+// debug probe when the bank comes from jumpers; D is avoided entirely --
+// it pairs with the RUN (reset) net.
+#define GPIO_BANK_JUMPER_0   24
+#define GPIO_BANK_JUMPER_1   26
 
 // ---------------------------------------------------------------------------
 // MHB 2616 chip pinout, as wired in the PMD 85-3

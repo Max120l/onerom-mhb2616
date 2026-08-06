@@ -125,7 +125,7 @@ living ones.
 Carried over from the sibling project, because they were earned there:
 
 - **Recovery jumper.** This firmware replaces One ROM's picoboot and the
-  board has no BOOTSEL button. Jumper 1 fitted at power-on hands straight
+  board has no BOOTSEL button. Jumper A fitted at power-on hands straight
   to the bootrom's USB mode before a single socket pin is touched.
 - **Nothing drives until selected.** Data pins power up as inputs and are
   enabled only while the (table-baked or mask-compared) select decision
@@ -173,15 +173,23 @@ cmake --build build
 
 `MHB_BOARD` selects the Fire 24 revision: `FIRE24E` (plain LED, the
 default) or `FIRE24F` (WS2812B status pixel). The socket-to-GPIO map is
-identical between them — the serving design does not change — but two
-human-facing things move, and one of them matters for safety: **the
-recovery jumper is select-jumper 1 on both boards but a different GPIO**
-(rev E: 25, rev F: 26), and on rev F the bank-select jumpers land on the
-SWD pads (GPIO 25/24), so detach any debug probe when the bank comes from
-jumpers. The rev F pixel speaks in colours: blue blip at power-on
-(firmware alive), green (serving), faint red (powered but nothing
-selecting us — distinguishable from a dead board, which a plain LED
-could not offer).
+identical between them — the serving design does not change. The jumpers
+are addressed by the letters printed on the board's underside, which are
+the same on both revisions even though the GPIOs behind them differ
+(verified at PCB-netlist level; the board headers carry the full table):
+
+- **Jumper A = recovery.** Fit it and power on to reach the bootrom's
+  USB flash mode. It is the column next to the X1 pad, far end from the
+  5V/GND header.
+- **Jumpers B and C = bank select** (B = bit 0, C = bit 1) in
+  STATIC/HOTSPOT. C doubles as SWCLK on both boards — detach any debug
+  probe, or pin the bank with `-DMHB_SOCKET_BANK`. D is not used by this
+  firmware: it pairs with the RUN (reset) net.
+- **X1** is the FULL8K flying-lead pad; X2 is unused.
+
+The rev F pixel speaks in colours: blue blip at power-on (firmware
+alive), green (serving), faint red (powered but nothing selecting us —
+distinguishable from a dead board, which a plain LED could not offer).
 
 The host tests need no SDK and no hardware:
 
