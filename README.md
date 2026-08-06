@@ -8,12 +8,14 @@ monitor.
 Target machine: **Tesla PMD 85-3**, whose 8 KB monitor lives in four 2616s.
 
 **Status: designed against the machine's schematic, host-tested, not yet run
-on hardware.** The socket wiring — which was this project's biggest open
-question — is now read directly off the PMD 85-3 CPU board schematic (DOSKA
-CPU, 1 PK 280 77), and it reshaped the firmware in the machine's favour:
-**two chips replaceable with zero wires, all four with one**. What remains
-before hardware is bookkeeping, not mystery: which socket holds which bank
-(a checksum exercise, [docs/PMD85-3.md](docs/PMD85-3.md)). This is a sibling
+on hardware — and every pre-hardware question is now closed.** The socket
+wiring is read directly off the PMD 85-3 CPU board schematic (DOSKA CPU,
+1 PK 280 77), and it reshaped the firmware in the machine's favour:
+**two chips replaceable with zero wires, all four with one**. The
+bank-to-socket assignment is settled byte-for-byte from the Infoserver ROM
+archive (DS4 "E" = bank 0 … DS7 "B" = bank 3; full table with build
+switches in [docs/PMD85-3.md](docs/PMD85-3.md)). Next stop is a bench,
+per the roadmap. This is a sibling
 of [onerom-1801re2](https://github.com/Max120l/onerom-1801re2) and inherits
 its habit: what has been verified is stated as fact, everything else as a
 question.
@@ -52,18 +54,20 @@ The mirrors are the decoder's business, not the sockets': a board just
 answers its selects. Details and the full maps:
 [docs/PMD85-3.md](docs/PMD85-3.md).
 
-The four chips split the 8 KB by A12 (the pair /CS nets) and A11 (PR):
+The four chips split the 8 KB by A12 (the pair /CS nets) and A11 (PR),
+and the physical assignment is settled byte-for-byte against the
+Infoserver ROM archive's per-chip files:
 
-| bank | monitor offset | pair /CS | A11 |
-|------|----------------|----------|-----|
-| 0 | 0x0000–0x07FF | first | 0 |
-| 1 | 0x0800–0x0FFF | first | 1 |
-| 2 | 0x1000–0x17FF | second | 0 |
-| 3 | 0x1800–0x1FFF | second | 1 |
+| bank | monitor offset | socket | letter | pair /CS | A11 |
+|------|----------------|--------|--------|----------|-----|
+| 0 | 0x0000–0x07FF | DS4 | E | DS4+DS5 | 0 |
+| 1 | 0x0800–0x0FFF | DS5 | D | DS4+DS5 | 1 |
+| 2 | 0x1000–0x17FF | DS6 | C | DS6+DS7 | 0 |
+| 3 | 0x1800–0x1FFF | DS7 | B | DS6+DS7 | 1 |
 
-Which *physical* pair is first, and which chip of a pair takes which A11
-state, is settled by checksum against a reference monitor image — the one
-piece of bookkeeping left before hardware.
+For a -3B machine the image to serve is `monit3B.rom` (it differs from
+plain `monit3.rom` in banks 0 and 3 only); reference CRCs for both live
+in [docs/PMD85-3.md](docs/PMD85-3.md).
 
 ## Design
 
@@ -192,6 +196,10 @@ cd test && make check
   behaviour, 8 KB monitor region.
 - [PMD 85 Infoserver](https://pmd85.borik.net/wiki/PMD_85_ROM) — ROM
   arrangements per model; 2616s observed in -3 units.
+- **Infoserver ROM archive** (`PMD85-rom-files`, RM-TEAM, via the
+  [ROM page](https://pmd85.borik.net/wiki/ROM)) — `monit3B.rom` and the
+  per-chip B/C/D/E `.bin` files whose byte-for-byte placement settled the
+  socket-to-bank assignment.
 - One ROM `rust/config/json/fire-24-e.json` — the socket-to-GPIO map,
   verified on hardware by the sibling project.
 

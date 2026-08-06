@@ -12,15 +12,14 @@ pin 18 (A11, inverted for DS5/DS7), pin 21 strapped to +5 V. The firmware's
 modes were rebuilt around the measured wiring; the guessed EXT mode
 (two address leads, common-/OE gating) died with the guess it was built on.
 
-## 2. Bank ↔ socket assignment — *checksums, no code*
+## ~~2. Bank ↔ socket assignment~~ — answered by the Infoserver archive
 
-**Question: which pair holds which monitor half, and which PR sense selects
-which chip?**
-
-Per docs/PMD85-3.md: dump the four originals, match to reference bank
-checksums, write down `MHB_SOCKET_PAIR`/`MHB_PR_INVERT`/`MHB_SOCKET_BANK`
-per socket. Also confirms the meaning of the schematic's E/D/0/B socket
-letters for the next person.
+The archive's per-chip files match `monit3B.rom` byte-for-byte:
+DS4 "E" = bank 0 … DS7 "B" = bank 3, chips selected at PR low. The full
+table with per-socket build switches is in docs/PMD85-3.md, along with
+reference CRCs for `monit3.rom` and `monit3B.rom` (they differ in banks
+0 and 3 only). No chip dumps were needed — which is fortunate, because
+the target machine's four originals are all bad.
 
 ## 3. Bench selftest through a ROM reader
 
