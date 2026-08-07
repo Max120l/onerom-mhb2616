@@ -24,7 +24,7 @@ $(BUILD)/test_decode_f: $(DEPS)
 check: $(BUILD)/test_decode_e $(BUILD)/test_decode_f
 	./$(BUILD)/test_decode_e
 	./$(BUILD)/test_decode_f
-	python3 -m pytest -q test_tools.py test_ramtest.py
+	python3 -m pytest -q test_tools.py test_ramtest.py test_diag.py
 
 clean:
 	rm -rf $(BUILD)

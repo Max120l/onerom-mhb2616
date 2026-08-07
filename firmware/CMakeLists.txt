@@ -113,9 +113,11 @@ endif()
 #   3  verdict lamp: one colour for the last completed pass of the served
 #      diagnostic ROM, plus a short blip for every pass since power-on
 #   4  the same beacons in full, one pulse each -- detail, hard to read
+#   5  diagnostic ladder: red/blue flashes counting the rung that failed
+#      or hung in the tools/make_diag.py image, green when all passed
 set(MHB_DIAG "0" CACHE STRING "Diagnostic: 0 off, 1 coverage, 2 kill address, 3 verdict lamp, 4 full beacons")
-if(NOT MHB_DIAG MATCHES "^[0-4]$")
-    message(FATAL_ERROR "MHB_DIAG must be 0, 1, 2, 3 or 4")
+if(NOT MHB_DIAG MATCHES "^[0-5]$")
+    message(FATAL_ERROR "MHB_DIAG must be 0..5")
 endif()
 target_compile_definitions(mhb2616 PRIVATE MHB_DIAG=${MHB_DIAG})
 

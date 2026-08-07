@@ -21,7 +21,9 @@ class Bus:
     """PMD 85-3 memory behaviour, with optional injected RAM faults."""
 
     def __init__(self, rom: bytes, stuck: dict | None = None,
-                 decay_after: int | None = None):
+                 decay_after: int | None = None,
+                 rom_stuck: tuple | None = None,
+                 rom_stuck_range: tuple | None = None):
         assert len(rom) == 0x2000
         self.rom = rom
         self.ram = bytearray(0x10000)
@@ -34,6 +36,15 @@ class Bus:
         # the one fault that a write-then-read-much-later test blames on the
         # cells when the real culprit is refresh.
         self.decay_after = decay_after
+        # (and_mask, or_mask) applied to every ROM read: a data line broken
+        # between the socket and the processor, which is what the bus-driver
+        # rung of the diagnostic exists to catch.
+        self.rom_stuck = rom_stuck
+        # Limit the ROM fault to an address range, so a *marginal* line can
+        # be modelled.  A line that is broken for every fetch stops the
+        # processor executing this program at all -- which is realistic, and
+        # which no ROM-resident diagnostic can ever report.
+        self.rom_stuck_range = rom_stuck_range
         self.written_at = {}
         self.clock = 0
         self.rom_reads = []
@@ -43,7 +54,13 @@ class Bus:
         self.clock += 1
         if self.startup_map or a >= 0xE000:
             self.rom_reads.append(a)
-            return self.rom[a & 0x1FFF]
+            v = self.rom[a & 0x1FFF]
+            if self.rom_stuck is not None:
+                lo, hi = self.rom_stuck_range or (0, 0xFFFF)
+                if lo <= a <= hi:
+                    and_m, or_m = self.rom_stuck
+                    v = (v & and_m) | or_m
+            return v
         v = self.ram[a]
         if self.decay_after is not None:
             written = self.written_at.get(a)
@@ -237,6 +254,62 @@ class CPU:
                     raise NotImplementedError(f"opcode {op:02X}")
                 return
         if hi == 3:
+            # Stack operations.  This program never uses them, but a
+            # processor fed corrupted bytes executes whatever it is given,
+            # and an emulator that throws on the first RST cannot model
+            # that at all.
+            if lo == 5 and not (op & 8):                # PUSH
+                v = self.get_rp(mid >> 1) if (mid >> 1) != 3 else 0
+                if (mid >> 1) == 3:
+                    v = (self.r["A"] << 8) | (0x02 | (self.cy)
+                                              | (self.p << 2) | (self.z << 6)
+                                              | (self.s << 7))
+                self.sp = (self.sp - 2) & 0xFFFF
+                self.bus.write(self.sp, v & 0xFF)
+                self.bus.write(self.sp + 1, v >> 8)
+                return
+            if lo == 1 and not (op & 8):                # POP
+                v = self.bus.read(self.sp) | (self.bus.read(self.sp + 1) << 8)
+                self.sp = (self.sp + 2) & 0xFFFF
+                if (mid >> 1) == 3:
+                    self.r["A"] = v >> 8
+                    f = v & 0xFF
+                    self.cy, self.p = bool(f & 1), bool(f & 4)
+                    self.z, self.s = bool(f & 0x40), bool(f & 0x80)
+                else:
+                    self.set_rp(mid >> 1, v)
+                return
+            if op == 0xCD or (lo == 5 and (op & 8)):    # CALL
+                t = self.fetch16()
+                self.sp = (self.sp - 2) & 0xFFFF
+                self.bus.write(self.sp, self.pc & 0xFF)
+                self.bus.write(self.sp + 1, self.pc >> 8)
+                self.pc = t
+                return
+            if op == 0xC9 or (lo == 1 and (op & 8)):    # RET
+                self.pc = self.bus.read(self.sp) | (self.bus.read(self.sp + 1) << 8)
+                self.sp = (self.sp + 2) & 0xFFFF
+                return
+            if lo == 7:                                 # RST
+                self.sp = (self.sp - 2) & 0xFFFF
+                self.bus.write(self.sp, self.pc & 0xFF)
+                self.bus.write(self.sp + 1, self.pc >> 8)
+                self.pc = mid * 8
+                return
+            if lo == 4:                                 # Ccc
+                t = self.fetch16()
+                if self.cond(mid):
+                    self.sp = (self.sp - 2) & 0xFFFF
+                    self.bus.write(self.sp, self.pc & 0xFF)
+                    self.bus.write(self.sp + 1, self.pc >> 8)
+                    self.pc = t
+                return
+            if lo == 0:                                 # Rcc
+                if self.cond(mid):
+                    self.pc = (self.bus.read(self.sp)
+                               | (self.bus.read(self.sp + 1) << 8))
+                    self.sp = (self.sp + 2) & 0xFFFF
+                return
             if op == 0xC3:
                 self.pc = self.fetch16()
                 return

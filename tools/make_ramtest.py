@@ -88,6 +88,11 @@ class Asm:
     def jnz(self, t): self.db(0xC2); self.a16(t)
     def jz(self, t):  self.db(0xCA); self.a16(t)
     def jc(self, t):  self.db(0xDA); self.a16(t)
+    def jnc(self, t): self.db(0xD2); self.a16(t)
+    def jp(self, t):  self.db(0xF2); self.a16(t)
+    def jm(self, t):  self.db(0xFA); self.a16(t)
+    def jpe(self, t): self.db(0xEA); self.a16(t)
+    def jpo(self, t): self.db(0xE2); self.a16(t)
     def mvi(self, r, v): self.db(0x06 | (r << 3), v)
     def lxi(self, rp, v): self.db(0x01 | (rp << 4)); self.a16(v)
     def mov(self, d, s): self.db(0x40 | (d << 3) | s)
@@ -102,6 +107,11 @@ class Asm:
     def cpi(self, v): self.db(0xFE, v)
     def lda(self, a): self.db(0x3A); self.a16(a)
     def out(self, p): self.db(0xD3, p)
+    def adi(self, v): self.db(0xC6, v)
+    def sui(self, v): self.db(0xD6, v)
+    def add(self, s): self.db(0x80 | s)
+    def dad(self, rp): self.db(0x09 | (rp << 4))
+    def inr(self, r): self.db(0x04 | (r << 3))
 
     def record_fault(self, tag: str, cont: str) -> None:
         """A holds the failing bits; remember them and which third of RAM.

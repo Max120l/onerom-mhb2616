@@ -404,6 +404,80 @@ int main(void) {
 
     multicore_launch_core1(serve_forever);
 
+#if MHB_DIAG == 5
+    // Diagnostic ladder lamp, for the image tools/make_diag.py builds.
+    //
+    // That ROM climbs eight rungs -- processor, then the bus through the
+    // 8228, then RAM -- announcing each one as it starts and again if it
+    // fails.  Everything here does is turn that into flashes you can count
+    // on one hand:
+    //
+    //   red   x (N+1)   rung N FAILED
+    //   blue  x (N+1)   rung N started and never finished -- it hung there
+    //   green steady    every rung passed
+    //
+    // Blue matters as much as red: a processor that stops mid-rung reports
+    // nothing at all, and "it hung in rung 2" is a different fault from
+    // "rung 2 said no".
+#if MHB_BOARD_HAS_NEOPIXEL
+    neo_init();
+#endif
+    while (true) {
+        uint32_t hits = g_beacons;
+        unsigned count = 0;
+        uint32_t colour = NEO_GRB(0x18, 0x00, 0x00);      // green: passed
+        for (unsigned n = 0; n < 8; n++) {                // any rung failed?
+            if (hits & (1u << (8 + n))) {
+                colour = NEO_GRB(0x00, 0x18, 0x00);       // red
+                count = n + 1;
+                break;
+            }
+        }
+        if (!count && !(hits & (1u << 16))) {
+            // Neither failed nor finished: it stopped somewhere.  The
+            // highest rung it announced is where.
+            colour = NEO_GRB(0x00, 0x00, 0x18);           // blue
+            for (unsigned n = 0; n < 8; n++) {
+                if (hits & (1u << n)) {
+                    count = n + 1;
+                }
+            }
+            if (!count) {
+                colour = NEO_GRB(0x10, 0x10, 0x10);       // white: never ran
+                count = 1;
+            }
+        }
+#if MHB_BOARD_HAS_NEOPIXEL
+        if (!count) {                                     // green, steady
+            neo_put(colour);
+            sleep_ms(2500);
+            neo_put(NEO_OFF);
+            sleep_ms(700);
+        } else {
+            for (unsigned i = 0; i < count; i++) {
+                neo_put(colour);
+                sleep_ms(350);
+                neo_put(NEO_OFF);
+                sleep_ms(350);
+            }
+            sleep_ms(2000);
+        }
+#else
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+        sleep_ms(count ? 150 : 2500);
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+        sleep_ms(350);
+        for (unsigned i = 1; i < count; i++) {
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+            sleep_ms(150);
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+            sleep_ms(350);
+        }
+        sleep_ms(2000);
+#endif
+    }
+#endif // MHB_DIAG == 5
+
 #if MHB_DIAG == 3
     // Verdict lamp: one colour, no counting.
     //
