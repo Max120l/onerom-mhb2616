@@ -20,7 +20,8 @@ PARITY = [bin(i).count("1") % 2 == 0 for i in range(256)]
 class Bus:
     """PMD 85-3 memory behaviour, with optional injected RAM faults."""
 
-    def __init__(self, rom: bytes, stuck: dict | None = None):
+    def __init__(self, rom: bytes, stuck: dict | None = None,
+                 decay_after: int | None = None):
         assert len(rom) == 0x2000
         self.rom = rom
         self.ram = bytearray(0x10000)
@@ -28,21 +29,36 @@ class Bus:
         # {address: (and_mask, or_mask)} applied on read-back: a dead bit
         # reads 0 (and_mask clears it) or 1 (or_mask sets it).
         self.stuck = stuck or {}
+        # DRAM that is not being refreshed: a cell read more than this many
+        # bus cycles after it was written comes back as zero.  This models
+        # the one fault that a write-then-read-much-later test blames on the
+        # cells when the real culprit is refresh.
+        self.decay_after = decay_after
+        self.written_at = {}
+        self.clock = 0
         self.rom_reads = []
 
     def read(self, a: int) -> int:
         a &= 0xFFFF
+        self.clock += 1
         if self.startup_map or a >= 0xE000:
             self.rom_reads.append(a)
             return self.rom[a & 0x1FFF]
         v = self.ram[a]
+        if self.decay_after is not None:
+            written = self.written_at.get(a)
+            if written is None or self.clock - written > self.decay_after:
+                v = 0x00
         if a in self.stuck:
             and_m, or_m = self.stuck[a]
             v = (v & and_m) | or_m
         return v
 
     def write(self, a: int, v: int) -> None:
-        self.ram[a & 0xFFFF] = v & 0xFF
+        a &= 0xFFFF
+        self.clock += 1
+        self.ram[a] = v & 0xFF
+        self.written_at[a] = self.clock
 
     def out(self, port: int, v: int) -> None:
         self.startup_map = False        # any I/O write clears it

@@ -164,3 +164,51 @@ def test_beacons_live_where_the_firmware_looks():
     # The firmware watches a fixed page; if this moves, both must move.
     assert make_ramtest.BEACON_OFF == 0x1F00
     assert make_ramtest.BEACON_ADDR == 0xFF00
+
+
+def run_decay(decay_after, ram_top=0x20, steps=60_000_000):
+    """Run against DRAM that loses its charge after `decay_after` cycles."""
+    rom = make_ramtest.build(ram_top=ram_top)
+    bus = Bus(rom, decay_after=decay_after)
+    cpu = CPU(bus)
+    done = 0
+    seen = set()
+    while done < steps and not cpu.halted:
+        for _ in range(100_000):
+            cpu.step()
+        done += 100_000
+        seen = {a - BEACON_LO for a in bus.rom_reads if BEACON_LO <= a <= BEACON_HI}
+        if 2 in seen:
+            for _ in range(400_000):
+                cpu.step()
+            seen = {a - BEACON_LO for a in bus.rom_reads
+                    if BEACON_LO <= a <= BEACON_HI}
+            break
+    return seen
+
+
+def test_unrefreshed_dram_is_not_blamed_on_the_chips():
+    """The control that stops a refresh fault reading as 'every chip bad'.
+
+    Cells that accept and return data immediately, but lose it long before
+    the march comes back round, must light the march fault (3) and leave
+    the hard-fault beacon (15) dark.  Getting this backwards would send
+    someone out to buy DRAM they do not need.
+    """
+    seen = run_decay(decay_after=500)
+    assert 3 in seen, "march did not notice the memory losing its contents"
+    assert 15 not in seen, "blamed the cells for what is a refresh fault"
+    assert not ({16 + b for b in range(8)} & seen), "named cells as hard-failed"
+
+
+def test_hard_fault_lights_both():
+    """A genuinely dead bit fails immediately as well as over a march."""
+    seen = run(stuck={0x1234: (0xFF, 0x01)})
+    assert 3 in seen, "march missed it"
+    assert 15 in seen, "immediate read-back missed a hard fault"
+    assert 16 in seen, "did not name D0 as hard-failed"
+
+
+def test_clean_machine_lights_no_hard_fault():
+    seen = run()
+    assert 15 not in seen and not ({16 + b for b in range(8)} & seen)

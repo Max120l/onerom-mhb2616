@@ -92,6 +92,12 @@ static volatile uint32_t g_served;
 #endif
 
 #if MHB_DIAG == 3
+// How many beacons the frame blinks.  Must cover every beacon the served
+// ROM can emit; see tools/make_ramtest.py, which currently uses 0..23.
+#ifndef MHB_BEACON_PULSES
+#define MHB_BEACON_PULSES  24
+#endif
+
 // One bit per beacon the host program has read.  See tools/make_ramtest.py
 // for what each one means; this firmware only counts them, deliberately --
 // the meaning belongs to the ROM being served, not to the board.
@@ -355,10 +361,12 @@ int main(void) {
 #if MHB_DIAG == 3
     // Beacon frame: what the ROM we are serving has to say.
     //
-    // Fifteen pulses, beacon 0 first, long green for lit and short red for
-    // dark, with a blue blink every five.  The meanings live in
+    // Twenty-four pulses, beacon 0 first, long green for lit and short red
+    // for dark, with a blue blink every five.  The meanings live in
     // tools/make_ramtest.py; the short version for its RAM test is that a
-    // healthy machine lights the first three and nothing else.
+    // healthy machine lights the first three and nothing else, and that
+    // pulse 16 is the control which decides whether a fault means dead
+    // cells or unrefreshed ones.
 #if MHB_BOARD_HAS_NEOPIXEL
     neo_init();
 #endif
@@ -369,13 +377,13 @@ int main(void) {
         sleep_ms(1800);
         neo_put(NEO_OFF);
         sleep_ms(700);
-        for (unsigned b = 0; b < 15; b++) {
+        for (unsigned b = 0; b < MHB_BEACON_PULSES; b++) {
             bool lit = (hits >> b) & 1;
             neo_put(lit ? NEO_SERVING : NEO_GRB(0x00, 0x14, 0x00));
             sleep_ms(lit ? 650 : 150);
             neo_put(NEO_OFF);
             sleep_ms(350);
-            if (b % 5 == 4 && b != 14) {
+            if (b % 5 == 4 && b != MHB_BEACON_PULSES - 1) {
                 neo_put(NEO_BOOT);
                 sleep_ms(120);
                 neo_put(NEO_OFF);
@@ -388,11 +396,11 @@ int main(void) {
         sleep_ms(1800);
         gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
         sleep_ms(700);
-        for (unsigned b = 0; b < 15; b++) {
+        for (unsigned b = 0; b < MHB_BEACON_PULSES; b++) {
             gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
             sleep_ms(((hits >> b) & 1) ? 650 : 100);
             gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
-            sleep_ms((b % 5 == 4 && b != 14) ? 800 : 350);
+            sleep_ms((b % 5 == 4 && b != MHB_BEACON_PULSES - 1) ? 800 : 350);
         }
         sleep_ms(1500);
 #endif

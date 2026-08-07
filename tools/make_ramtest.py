@@ -27,8 +27,16 @@ Beacons, in the order the frame blinks them:
     12  fault < 4000h
     13  fault 4000-7FFFh
     14  fault 8000-BFFFh
+    15  HARD FAULT     cells fail even when read back immediately
+ 16-23  D0..D7         which bits failed the immediate read-back
 
-A clean machine therefore blinks 0, 1 and 2 and nothing else, over and over.
+A clean machine blinks 0, 1 and 2 and nothing else, over and over.
+
+Beacon 15 is the control that decides what a fault means. If the march
+reports faults (3) and the immediate read-back does not (15 dark), the
+cells accept and return data but do not hold it: that is a refresh
+problem, not a memory problem, and replacing the chips would fix
+nothing.
 """
 
 import argparse
@@ -87,6 +95,7 @@ class Asm:
     def ora(self, s): self.db(0xB0 | s)
     def xra(self, s): self.db(0xA8 | s)
     def ani(self, v): self.db(0xE6, v)
+    def xri(self, v): self.db(0xEE, v)
     def ori(self, v): self.db(0xF6, v)
     def cpi(self, v): self.db(0xFE, v)
     def lda(self, a): self.db(0x3A); self.a16(a)
@@ -150,6 +159,12 @@ def build(ram_top: int = RAM_TOP) -> bytes:
     # monitor's own first I/O write, chosen because it is known safe here.
     a.mvi(A, 0x82)
     a.out(0xF7)
+    # ...and the second write the monitor makes, so this program initialises
+    # the machine exactly as its own firmware does.  Skipping it would leave
+    # one difference between "the monitor ran" and "the test ran", which is
+    # precisely the difference the test is trying to measure.
+    a.mvi(A, 0x09)
+    a.out(0xF7)
     a.beacon(1)
 
     # Paint video RAM #1 (C000-DFFF) so a human sees the program is alive
@@ -187,6 +202,42 @@ def build(ram_top: int = RAM_TOP) -> bytes:
     a.label("pass")
     a.mvi(B, 0x00)
     a.mvi(C, 0x00)
+    a.mvi(D, 0x00)
+
+    # ---- immediate write-and-read-back -----------------------------------
+    # Write a cell and read it straight back, microseconds later, before
+    # anything else touches the array.  This is the control for March C-:
+    #
+    #   both fail      the cells or their data path are genuinely broken
+    #   March fails,
+    #   this passes    the cells accept and return data but do not HOLD it
+    #                  -- dynamic RAM that is not being refreshed, which is
+    #                  a fault in the refresh circuit or in this program's
+    #                  right to expect refresh, NOT in the memory chips
+    #
+    # Without this control, a machine whose refresh has stopped is
+    # confidently reported as having every chip bad, and someone spends a
+    # weekend replacing perfectly good DRAM.
+    a.lxi(RP_H, 0x0000)
+    a.label("imm")
+    a.mvi(M, 0xAA)
+    a.mov(A, M)
+    a.xri(0xAA)
+    a.jz("imm_b")
+    a.ora(D)
+    a.mov(D, A)
+    a.label("imm_b")
+    a.mvi(M, 0x55)
+    a.mov(A, M)
+    a.xri(0x55)
+    a.jz("imm_n")
+    a.ora(D)
+    a.mov(D, A)
+    a.label("imm_n")
+    a.inx(RP_H)
+    a.mov(A, H)
+    a.cpi(ram_top)
+    a.jnz("imm")
 
     # m0: write 0 everywhere.
     a.lxi(RP_H, 0x0000)
@@ -303,8 +354,8 @@ def build(ram_top: int = RAM_TOP) -> bytes:
     a.beacon(2)                       # a whole pass finished
     a.mov(A, B)
     a.ora(A)
-    a.jz("pass")                      # clean: straight round again
-    a.beacon(3)                       # RAM FAULT
+    a.jz("report_imm")                # no march faults; still report the control
+    a.beacon(3)                       # RAM FAULT (over a full march)
 
     for bit in range(8):
         a.mov(A, B)
@@ -320,6 +371,18 @@ def build(ram_top: int = RAM_TOP) -> bytes:
         a.beacon(12 + third)
         a.label(f"skipthird{third}")
 
+    a.label("report_imm")
+    a.mov(A, D)
+    a.ora(A)
+    a.jz("done")
+    a.beacon(15)                      # cells fail even read back immediately
+    for bit in range(8):
+        a.mov(A, D)
+        a.ani(1 << bit)
+        a.jz(f"skipimm{bit}")
+        a.beacon(16 + bit)
+        a.label(f"skipimm{bit}")
+    a.label("done")
     a.jmp("pass")
 
     body = a.link()
