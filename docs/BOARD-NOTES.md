@@ -118,3 +118,34 @@ a scope, and it also says a deliberate hold delay would be treating a
 symptom that cannot exist. If a future host ever does need one, the place
 to add it is the `else if (driving)` arm of the serve loop, and the note
 to write down first is what measurement justified it.
+
+## Diagnostics must not be recorded on the select edge
+
+**A bug worth remembering, because it made the instrument accuse the
+reader.** The diagnostic counters were originally updated inside the
+not-driving-to-driving transition, on the reasoning that one transition
+equals one host access. That reasoning is wrong on this board.
+
+In FULL8K the board drives for *either* pair select. A run of accesses
+that stays inside the ROM region can therefore hold at least one select
+asserted the whole way, and a whole burst of reads produces a single
+edge. Everything after the first read in such a burst was silently
+dropped.
+
+The symptom was frames that could not physically exist: a beacon the
+served ROM emits *unconditionally* between two others coming back dark,
+and a summary flag lit with all of its own detail bits dark. Both were
+read off the LED correctly. The frames were right and the board was
+wrong, and two of them were dismissed as misreadings before the cause was
+found — which is the expensive kind of mistake, because it spends the
+user's trust in their own eyes.
+
+The fix is to record on **every iteration where the drive bit is set**,
+not on the edge, with a one-entry de-bounce so a held select cannot count
+the same beacon twice. Over-reporting is not a risk: the address is
+settled before a select asserts, and every record is an idempotent OR
+into a bitmask. The only cost is a few instructions per loop in
+diagnostic builds, which serve no timing budget worth defending.
+
+The general rule: **an edge is not an event.** If an instrument counts
+edges, be certain the thing being measured produces exactly one.

@@ -313,6 +313,9 @@ static void __not_in_flash_func(serve_forever)(void) {
 #else
 static void __not_in_flash_func(serve_forever)(void) {
     bool driving = false;
+#if MHB_DIAG >= 3
+    unsigned last_beacon = 0xFF;      // de-bounce a held select; see below
+#endif
 
     for (;;) {
         uint32_t in  = sio_hw->gpio_in;
@@ -329,19 +332,41 @@ static void __not_in_flash_func(serve_forever)(void) {
                 sio_hw->gpio_oe_set = 0xFFu;
                 driving = true;
                 g_served++;
+            }
+            // Diagnostics are recorded on every iteration we are driving,
+            // NOT only on the not-driving-to-driving edge.
+            //
+            // The edge is not once per host access.  This board drives for
+            // either pair select, so a run of accesses that stays inside
+            // the ROM region can hold at least one of them asserted the
+            // whole way -- and then a whole burst of reads produces one
+            // edge.  Recording on the edge silently drops everything after
+            // the first, which is how a beacon emitted unconditionally
+            // between two others can come out dark: not a misread frame,
+            // a dropped beacon.
+            //
+            // Recording every iteration cannot over-report either: the
+            // address is settled before a select asserts, and every record
+            // here is an idempotent OR into a bitmask.
 #if MHB_DIAG == 1
-                // The bank is already in the word we looked up; see decode.h.
-                g_bank_seen |= (uint8_t)(1u << ((v & MHB_LUT16_BANK_MASK)
-                                                >> MHB_LUT16_BANK_SHIFT));
+            // The bank is already in the word we looked up; see decode.h.
+            g_bank_seen |= (uint8_t)(1u << ((v & MHB_LUT16_BANK_MASK)
+                                            >> MHB_LUT16_BANK_SHIFT));
 #elif MHB_DIAG == 2
-                // One store.  Decoding it into bank+address costs two loops
-                // and belongs on core 0, which has nothing else to do.
-                g_last_idx = (uint16_t)idx;
+            // One store.  Decoding it into bank+address costs two loops
+            // and belongs on core 0, which has nothing else to do.
+            g_last_idx = (uint16_t)idx;
 #elif MHB_DIAG >= 3
-                unsigned bn = (v & MHB_LUT16_BEACON_MASK)
-                              >> MHB_LUT16_BEACON_SHIFT;
-                if (bn) {
-                    unsigned b = bn - 1;
+            unsigned bn = (v & MHB_LUT16_BEACON_MASK)
+                          >> MHB_LUT16_BEACON_SHIFT;
+            if (bn) {
+                unsigned b = bn - 1;
+                // Only act on a beacon the first time this access presents
+                // it, or a held select would count one read many times --
+                // which matters for the pass counter, where each count is
+                // a whole sweep.
+                if (b != last_beacon) {
+                    last_beacon = b;
                     g_beacons |= 1u << b;
                     if (b == BEACON_PASS_START) {
                         g_pass_last = g_pass_acc;
@@ -352,8 +377,10 @@ static void __not_in_flash_func(serve_forever)(void) {
                         g_pass_acc |= 1u << b;
                     }
                 }
-#endif
+            } else {
+                last_beacon = 0xFF;
             }
+#endif
         } else if (driving) {
             sio_hw->gpio_oe_clr = 0xFFu;
             driving = false;
