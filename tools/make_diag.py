@@ -50,6 +50,31 @@ Read it with firmware built `-DMHB_DIAG=5`:
 
     ./make_diag.py -o diag.bin
     ./gen_rom_images.py -o ../firmware/rom_images.c --monitor diag.bin
+
+`--stage io` builds a second nine-rung image for the machine that climbs
+0-6 and then stops. It drops the processor rungs, which have by then been
+proved, and spends all nine on the thing that is left: one kind of bus
+cycle per rung, in order of what each depends on.
+
+    0  alive
+    1  a memory WRITE completed        (still mirrored, so a write and
+                                        nothing else -- rungs 0-6 above are
+                                        all reads, so this is the machine's
+                                        first write of any kind)
+    2  a memory READ completed         (still mirrored, so served from ROM:
+                                        no DRAM cell involved)
+    3  OUT F7h, A=82h completed
+    4  OUT F7h, A=09h completed
+    5  a read that is genuinely RAM completed
+    6  the map actually switched       (reading C3 means it did not)
+    7  video RAM                       (C000-DFFF, the one region arbitrated
+                                        against the display circuit)
+    8  RAM, March C-
+
+An 8080 cannot fall over on a bad instruction; it can only stall waiting
+for READY, or sit in HOLD. So on this image "started rung N and never
+finished" -- blue x (N+1) -- names a bus cycle that never completed, and
+that is a specific enough fact to put a probe on.
 """
 
 import argparse
@@ -64,12 +89,104 @@ PATTERN_OFF = 0x1E00           # 256 bytes, 00..FF, for the data-bus rung
 PATTERN_ADDR = BASE + PATTERN_OFF
 FILLER_OFF = 0x1DFF            # one byte, adjusted so the whole ROM sums to 0
 
+VRAM_BASE = 0xC000             # video RAM, shared with the display circuit
+
 N_RUNGS = 9
 RUNG_STARTED = 0               # beacons 0..8
 RUNG_FAILED = N_RUNGS          # beacons 9..17
 ALL_PASSED = 2 * N_RUNGS       # beacon 18
 BIT_BASE = 2 * N_RUNGS + 1     # beacons 19..26
-BIT_RUNGS = (5, 8)             # the rungs that report which bits failed
+
+# Both stages are nine rungs, so one firmware constant and one lamp serve
+# either.  `bit_rungs` are the rungs that go on to name which data bits
+# were wrong; the rest just fail.
+STAGES = {
+    "cpu": {"emit": lambda a, t: emit(a, t), "bit_rungs": (5, 8)},
+    "io": {"emit": lambda a, t: emit_io(a, t), "bit_rungs": (8,)},
+}
+
+
+def emit_io(a: Asm, ram_top: int) -> None:
+    """The `io` stage: one bus cycle per rung, in order of what they need.
+
+    Only worth building once the `cpu` stage has climbed rungs 0-6, because
+    it drops them.  What it buys is that every rung is a *single kind of bus
+    cycle*, so a machine that freezes on one names which one.  A hang is the
+    point here: the 8080 cannot fall over on a bad instruction, it can only
+    stall waiting for READY (or sit in HOLD), so "started rung N and never
+    finished" is a bus cycle that never completed.
+    """
+    # ---- rung 0: alive ---------------------------------------------------
+    a.beacon(RUNG_STARTED + 0)
+
+    # ---- rung 1: the first memory WRITE ----------------------------------
+    # Still in the startup map, where writes go to RAM and reads come from
+    # ROM.  So this is a write cycle and nothing else: no read depends on
+    # it, and the value cannot be checked yet.  Deliberately first, because
+    # a write is the simplest cycle the machine has never yet been asked to
+    # do -- rungs 0-6 of the cpu stage are all reads.
+    a.beacon(RUNG_STARTED + 1)
+    a.lxi(RP_H, 0x0000)
+    a.mvi(M, 0x5A)
+
+    # ---- rung 2: a memory READ at a low address --------------------------
+    # Still mirrored, so this comes from ROM: it exercises the read cycle
+    # and the low half of the address bus without depending on a single
+    # DRAM cell.  Offset 0000 of the image is C3, the entry jump.  Anything
+    # else means the startup map is not in the state a reset leaves it in.
+    a.beacon(RUNG_STARTED + 2)
+    a.lxi(RP_H, 0x0000)
+    a.mov(A, M)
+    a.cpi(0xC3)
+    a.jnz("fail2")
+
+    # ---- rungs 3 and 4: the two port writes, one each ---------------------
+    a.beacon(RUNG_STARTED + 3)
+    a.mvi(A, 0x82)
+    a.out(0xF7)
+
+    a.beacon(RUNG_STARTED + 4)
+    a.mvi(A, 0x09)
+    a.out(0xF7)
+
+    # ---- rung 5: the first read that is genuinely RAM --------------------
+    a.beacon(RUNG_STARTED + 5)
+    a.lxi(RP_H, 0x0000)
+    a.mov(A, M)
+    a.mov(C, A)                                # keep it for rung 6
+
+    # ---- rung 6: did the map actually switch? ----------------------------
+    # C3 means the read still came from ROM and the port writes did nothing,
+    # which is a fault in the I/O decoding and not in memory.  Any other
+    # value means the map moved; whether it is the right value is rung 8's
+    # business.
+    a.beacon(RUNG_STARTED + 6)
+    a.mov(A, C)
+    a.cpi(0xC3)
+    a.jz("fail6")
+
+    # ---- rung 7: video RAM -----------------------------------------------
+    # C000-DFFF is shared with the display, so it is the one region whose
+    # access is arbitrated against the video circuit.  If that arbitration
+    # is stuck the CPU waits here and nowhere else.  It writes a ramp, which
+    # also puts a recognisable pattern on a screen that has sync.
+    a.beacon(RUNG_STARTED + 7)
+    a.lxi(RP_H, VRAM_BASE)
+    a.label("r7loop")
+    a.mov(A, L)
+    a.mov(M, A)
+    a.inx(RP_H)
+    a.mov(A, H)
+    a.cpi(VRAM_TOP)
+    a.jnz("r7loop")
+    a.lxi(RP_H, VRAM_BASE)
+    a.mov(A, M)
+    a.ora(A)
+    a.jnz("fail7")                             # L was 0 there, so must be 0
+
+    # ---- rung 8: RAM ------------------------------------------------------
+    a.beacon(RUNG_STARTED + 8)
+    emit_ram(a, ram_top)
 
 
 def emit(a: Asm, ram_top: int) -> None:
@@ -212,6 +329,8 @@ def emit(a: Asm, ram_top: int) -> None:
     a.beacon(RUNG_STARTED + 8)
     emit_ram(a, ram_top)
 
+
+def emit_tail(a: Asm, bit_rungs) -> None:
     # ---- everything passed ----------------------------------------------
     a.label("passed")
     a.beacon(ALL_PASSED)
@@ -223,7 +342,7 @@ def emit(a: Asm, ram_top: int) -> None:
     for n in range(N_RUNGS):
         a.label(f"fail{n}")
         a.beacon(RUNG_FAILED + n)
-        if n in BIT_RUNGS:                     # these two know which bits
+        if n in bit_rungs:                     # these ones know which bits
             for bit in range(8):
                 a.mov(A, B)
                 a.ani(1 << bit)
@@ -284,15 +403,17 @@ def emit_ram(a: Asm, ram_top: int) -> None:
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("m5")
 
 
-def build(ram_top: int = RAM_TOP) -> bytes:
+def build(ram_top: int = RAM_TOP, stage: str = "cpu") -> bytes:
     rom = bytearray(b"\x00" * ROM_SIZE)
 
     head = Asm(BASE)
     head.jmp(BASE + ENTRY)
     rom[0:len(head.buf)] = head.link()
 
+    spec = STAGES[stage]
     a = Asm(BASE + ENTRY)
-    emit(a, ram_top)
+    spec["emit"](a, ram_top)
+    emit_tail(a, spec["bit_rungs"])
     body = a.link()
     assert ENTRY + len(body) < FILLER_OFF, "program overruns the data pages"
     rom[ENTRY:ENTRY + len(body)] = body
@@ -318,11 +439,15 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-o", "--output", type=Path, required=True)
     ap.add_argument("--ram-top", type=lambda s: int(s, 0), default=RAM_TOP)
+    ap.add_argument("--stage", choices=sorted(STAGES), default="cpu",
+                    help="cpu: the processor ladder.  io: one bus cycle per "
+                         "rung, for a machine that passes cpu 0-6 and then "
+                         "stops.")
     args = ap.parse_args()
-    rom = build(args.ram_top)
+    rom = build(args.ram_top, args.stage)
     args.output.write_bytes(rom)
-    print(f"wrote {args.output}: {len(rom)} bytes, {N_RUNGS} rungs, "
-          f"beacons at {BEACON_ADDR:04X}")
+    print(f"wrote {args.output}: {len(rom)} bytes, stage {args.stage}, "
+          f"{N_RUNGS} rungs, beacons at {BEACON_ADDR:04X}")
     return 0
 
 

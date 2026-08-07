@@ -19,8 +19,8 @@ IO_RUNG = N - 2
 RAM_RUNG = N - 1
 
 
-def run(ram_top=0x08, steps=3_000_000, **kw):
-    rom = make_diag.build(ram_top=ram_top)
+def run(ram_top=0x08, steps=3_000_000, stage="cpu", **kw):
+    rom = make_diag.build(ram_top=ram_top, stage=stage)
     bus = Bus(rom, **kw)
     cpu = CPU(bus)
     for _ in range(steps):
@@ -48,8 +48,6 @@ def test_healthy_machine_climbs_every_rung():
 def test_no_stack_instruction_anywhere():
     """The whole point: this must run on a machine whose RAM is suspect."""
     from i8080dis import decode
-    rom = make_diag.build()
-    body = rom[make_diag.ENTRY:make_diag.FILLER_OFF]
     forbidden = ({0xC9, 0xCD, 0xE3, 0xF9}
                  | {0xC0 | (c << 3) for c in range(8)}
                  | {0xC4 | (c << 3) for c in range(8)}
@@ -57,11 +55,15 @@ def test_no_stack_instruction_anywhere():
                  | {0xC5, 0xD5, 0xE5, 0xF5}
                  | {0xC1, 0xD1, 0xE1, 0xF1}
                  | {0x31})                       # LXI SP
-    i = 0
-    while i < len(body):
-        assert body[i] not in forbidden, f"stack opcode {body[i]:02X} at +{i:04X}"
-        _, n = decode(body, i)
-        i += n
+    for stage in make_diag.STAGES:
+        rom = make_diag.build(stage=stage)
+        body = rom[make_diag.ENTRY:make_diag.FILLER_OFF]
+        i = 0
+        while i < len(body):
+            assert body[i] not in forbidden, \
+                f"{stage}: stack opcode {body[i]:02X} at +{i:04X}"
+            _, n = decode(body, i)
+            i += n
 
 
 def test_data_bus_rung_names_the_broken_line():
@@ -109,6 +111,35 @@ def test_processor_rungs_run_before_any_write_or_port_access():
     assert r["failed"] == {IO_RUNG}, f"blamed {r['failed']}, want the I/O rung"
     assert RAM_RUNG not in r["started"], "tested RAM it could not reach"
     assert not r["passed"]
+
+
+def test_io_stage_climbs_every_rung_on_a_good_machine():
+    r = run(stage="io")
+    assert r["started"] == set(range(N)), "did not reach every rung"
+    assert not r["failed"], f"failed rungs on a good machine: {r['failed']}"
+    assert r["passed"]
+
+
+def test_io_stage_separates_a_dead_port_from_dead_memory():
+    """The whole reason the io stage exists.
+
+    A port write that goes nowhere leaves the startup map in place, so every
+    read keeps coming from ROM and RAM is unreachable however healthy it is.
+    The rungs below must all still pass -- the write cycle, the read cycle
+    and both OUTs completed -- and only the map check may fail.
+    """
+    r = run(stage="io", sticky_map=True)
+    assert r["started"] == set(range(7)), \
+        f"stopped before the map check: {r['started']}"
+    assert r["failed"] == {6}, f"blamed {r['failed']}, want the map rung"
+    assert not r["passed"]
+
+
+def test_io_stage_still_finds_a_real_ram_fault_last():
+    r = run(stage="io", stuck={a: (0xFF, 0x08) for a in range(0x800)})
+    assert r["started"] == set(range(N)), "did not get as far as RAM"
+    assert r["failed"] == {RAM_RUNG}, f"blamed {r['failed']}, want RAM"
+    assert r["bits"] == {3}
 
 
 def test_rom_checksum_excludes_the_beacon_page():
