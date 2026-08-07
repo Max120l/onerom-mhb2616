@@ -17,7 +17,7 @@ depends only on rungs below it:
                     exact data lines that are wrong
     6  ROM sum      all 8192 bytes summed; catches address-line faults
                     that a 256-byte table would step straight over
-    7  I/O          OUT F7h, clearing the startup mirror map
+    7  I/O          a write to the system 8255, clearing the startup map
     8  RAM          March C- plus an immediate read-back control
 
 Rungs 0-6 are the processor and the ROM path and nothing else: no writes,
@@ -28,6 +28,10 @@ execute at all. An earlier version cleared the mirror map inside rung 0,
 which meant a machine that died on the port write reported "the processor
 never got past its first instruction" -- true, but pointing at the wrong
 part.
+
+Rung 7 writes to port F4h, NOT the F7h the monitor uses. See the note on
+the io stage below: `OUT F7h` with bit 7 set takes the ROM out of the
+address space, and doing that from ROM ends the program.
 
 There is no stack anywhere in this program: no CALL, no PUSH, no RET, no
 interrupts. Every branch is a jump and every variable is a register,
@@ -63,13 +67,28 @@ cycle per rung, in order of what each depends on.
                                         first write of any kind)
     2  a memory READ completed         (still mirrored, so served from ROM:
                                         no DRAM cell involved)
-    3  OUT F7h, A=82h completed
-    4  OUT F7h, A=09h completed
-    5  a read that is genuinely RAM completed
-    6  the map actually switched       (reading C3 means it did not)
-    7  video RAM                       (C000-DFFF, the one region arbitrated
+    3  the startup map cleared         (OUT F4h -- see below)
+    4  RAM actually holds data         (rung 1's byte, read back at last)
+    5  RAM, March C-
+    6  video RAM                       (C000-DFFF, the one region arbitrated
                                         against the display circuit)
-    8  RAM, March C-
+    7  the monitor's paging dance      (the one step that cannot be made safe)
+    8  came back from it
+
+The order is not cosmetic. `OUT F7h` with bit 7 set is an 8255 mode set:
+it configures port C upper as an output and clears every port C latch on
+the way, which drops PC4 -- and PC4 is what puts the ROM at E000-FFFF. So
+that single instruction removes the ROM from the machine, and the next
+instruction is fetched from RAM. The monitor copies its own next four
+bytes into RAM first and lets them execute from there (monit3B E0A3-E0B7);
+anything that issues the mode set from ROM without doing so stops
+existing on that instruction.
+
+An earlier version of this file did exactly that, in both stages, and the
+resulting hang was read as a machine fault twice. Rung 3 therefore clears
+the startup map with a write to port A instead, which leaves port C
+untouched and the ROM in place, and the paging dance is deferred to rung 7
+where everything else has already been measured.
 
 An 8080 cannot fall over on a bad instruction; it can only stall waiting
 for READY, or sit in HOLD. So on this image "started rung N and never
@@ -102,7 +121,7 @@ BIT_BASE = 2 * N_RUNGS + 1     # beacons 19..26
 # were wrong; the rest just fail.
 STAGES = {
     "cpu": {"emit": lambda a, t: emit(a, t), "bit_rungs": (5, 8)},
-    "io": {"emit": lambda a, t: emit_io(a, t), "bit_rungs": (8,)},
+    "io": {"emit": lambda a, t: emit_io(a, t), "bit_rungs": (5,)},
 }
 
 
@@ -140,53 +159,99 @@ def emit_io(a: Asm, ram_top: int) -> None:
     a.cpi(0xC3)
     a.jnz("fail2")
 
-    # ---- rungs 3 and 4: the two port writes, one each ---------------------
+    # ---- rung 3: clear the startup map, WITHOUT losing the ROM -----------
+    # Any write to the system 8255 clears the mirror.  This one goes to
+    # port A, not the control register, and that distinction is the whole
+    # rung: a write to the control register with bit 7 set is a mode set,
+    # and a mode set clears the port C latches, which drops PC4, which
+    # takes the ROM out of the address space entirely.  Port A leaves port
+    # C alone, so the machine lands in the ordinary map -- RAM below E000,
+    # ROM above it -- and everything below can be measured with the board
+    # still being read.
+    #
+    # Port A is an input until something configures it otherwise, so the
+    # value written goes to a latch that drives nothing.  That is the point:
+    # it is the most harmless write the machine accepts.
     a.beacon(RUNG_STARTED + 3)
-    a.mvi(A, 0x82)
-    a.out(0xF7)
+    a.mvi(A, 0x00)
+    a.out(0xF4)
 
+    # ---- rung 4: the first proof that a RAM cell holds anything ----------
+    # Rung 1 wrote 5A to 0000 and could not check it, because reads were
+    # still coming from ROM.  Now they are not.  C3 means the mirror never
+    # cleared and this is still the ROM answering; anything else means the
+    # map moved, and whether the value is *right* is rung 5's business.
     a.beacon(RUNG_STARTED + 4)
-    a.mvi(A, 0x09)
-    a.out(0xF7)
-
-    # ---- rung 5: the first read that is genuinely RAM --------------------
-    a.beacon(RUNG_STARTED + 5)
     a.lxi(RP_H, 0x0000)
     a.mov(A, M)
-    a.mov(C, A)                                # keep it for rung 6
-
-    # ---- rung 6: did the map actually switch? ----------------------------
-    # C3 means the read still came from ROM and the port writes did nothing,
-    # which is a fault in the I/O decoding and not in memory.  Any other
-    # value means the map moved; whether it is the right value is rung 8's
-    # business.
-    a.beacon(RUNG_STARTED + 6)
-    a.mov(A, C)
     a.cpi(0xC3)
-    a.jz("fail6")
+    a.jz("fail4")
 
-    # ---- rung 7: video RAM -----------------------------------------------
+    # ---- rung 5: RAM ------------------------------------------------------
+    a.beacon(RUNG_STARTED + 5)
+    emit_ram(a, ram_top, "fail5")
+
+    # ---- rung 6: video RAM -----------------------------------------------
     # C000-DFFF is shared with the display, so it is the one region whose
     # access is arbitrated against the video circuit.  If that arbitration
     # is stuck the CPU waits here and nowhere else.  It writes a ramp, which
     # also puts a recognisable pattern on a screen that has sync.
-    a.beacon(RUNG_STARTED + 7)
+    a.beacon(RUNG_STARTED + 6)
     a.lxi(RP_H, VRAM_BASE)
-    a.label("r7loop")
+    a.label("r6loop")
     a.mov(A, L)
     a.mov(M, A)
     a.inx(RP_H)
     a.mov(A, H)
     a.cpi(VRAM_TOP)
-    a.jnz("r7loop")
+    a.jnz("r6loop")
     a.lxi(RP_H, VRAM_BASE)
     a.mov(A, M)
     a.ora(A)
-    a.jnz("fail7")                             # L was 0 there, so must be 0
+    a.jnz("fail6")                             # L was 0 there, so must be 0
 
-    # ---- rung 8: RAM ------------------------------------------------------
+    # ---- rung 7: the monitor's paging dance, done properly ---------------
+    # Last, and deliberately so: this is the one step that cannot be made
+    # safe, because for four instruction bytes there is no ROM in the
+    # machine at all.
+    #
+    # `OUT F7h` with bit 7 set is an 8255 mode set.  It configures port C
+    # upper as an output, and on the way it clears every port C latch --
+    # including PC4, which is what puts the ROM at E000-FFFF.  So the
+    # instruction after it is fetched from RAM.  The monitor handles this by
+    # copying its own next four bytes into RAM at the same addresses before
+    # it jumps (monit3B E0A3-E0B7, with LHLD/SHLD); reads come from ROM and
+    # writes go to RAM, so copying a byte to where it already is moves it
+    # from one to the other.  This does the same thing a byte at a time.
+    #
+    # Everything above has already run, so if the machine dies here it dies
+    # having told us the processor, the bus, the ports and RAM are sound --
+    # which makes it a fact about the paging latch and not a mystery.
+    a.beacon(RUNG_STARTED + 7)
+    a.lxi(RP_H, "tramp")
+    a.mvi(C, 4)
+    a.label("r7copy")
+    a.mov(A, M)                                # from ROM
+    a.mov(M, A)                                # ...to RAM, same address
+    a.inx(RP_H)
+    a.dcr(C)
+    a.jnz("r7copy")
+
+    a.mvi(A, 0x82)
+    a.out(0xF7)                                # ROM leaves the address space
+    a.label("tramp")                           # these four bytes run from RAM
+    a.mvi(A, 0x09)
+    a.out(0xF7)                                # BSR sets PC4: ROM is back
+
+    # ---- rung 8: we came back --------------------------------------------
+    # Reaching this beacon at all is the result: the board is being read
+    # again, so the ROM returned to the map and the machine survived the
+    # only manoeuvre its own monitor cannot avoid.
     a.beacon(RUNG_STARTED + 8)
-    emit_ram(a, ram_top)
+    a.lxi(RP_H, BASE)
+    a.mov(A, M)
+    a.cpi(0xC3)                                # E000 is the entry jump
+    a.jnz("fail8")
 
 
 def emit(a: Asm, ram_top: int) -> None:
@@ -304,21 +369,26 @@ def emit(a: Asm, ram_top: int) -> None:
     a.mov(A, B); a.ora(A); a.jnz("fail6")
 
     # ---- rung 7: the first I/O write -------------------------------------
-    # Clear the startup mirror map, exactly as the monitor does.  Until this
-    # happens reads below E000 come from ROM and writes go to RAM, so no RAM
-    # rung is possible -- but nothing above this point needed it either.
+    # Clear the startup mirror map.  Until this happens reads below E000
+    # come from ROM and writes go to RAM, so no RAM rung is possible -- but
+    # nothing above this point needed it either.
+    #
+    # Port A of the system 8255, NOT the F7h the monitor writes.  F7h is the
+    # control register, and the monitor's 82h is a mode set: it clears the
+    # port C output latches, dropping PC4, and PC4 is what puts the ROM at
+    # E000-FFFF.  Issuing it from ROM ends the program on that instruction.
+    # The monitor gets away with it by executing its next four bytes from a
+    # RAM copy; the io stage reproduces that manoeuvre deliberately, but a
+    # ladder whose job is to get as far as RAM has no business risking it.
     #
     # The check afterwards is the map itself, not memory: write a byte to
     # 0000 and read it back.  Address 0000 in ROM holds C3, the entry jump.
     # Reading back exactly C3 means the read still came from ROM and the OUT
-    # did not take, which is a fault in the port and not in RAM.  Anything
-    # else means the map switched; whether the value is right is rung 8's
-    # business, so only C3 fails here.
+    # did not take.  Anything else means the map switched; whether the value
+    # is right is rung 8's business, so only C3 fails here.
     a.beacon(RUNG_STARTED + 7)
-    a.mvi(A, 0x82)
-    a.out(0xF7)
-    a.mvi(A, 0x09)
-    a.out(0xF7)
+    a.mvi(A, 0x00)
+    a.out(0xF4)
     a.lxi(RP_H, 0x0000)
     a.mvi(M, 0x5A)
     a.mov(A, M)
@@ -327,7 +397,7 @@ def emit(a: Asm, ram_top: int) -> None:
 
     # ---- rung 8: RAM -----------------------------------------------------
     a.beacon(RUNG_STARTED + 8)
-    emit_ram(a, ram_top)
+    emit_ram(a, ram_top, "fail8")
 
 
 def emit_tail(a: Asm, bit_rungs) -> None:
@@ -352,8 +422,8 @@ def emit_tail(a: Asm, bit_rungs) -> None:
         a.jmp(f"fail{n}")
 
 
-def emit_ram(a: Asm, ram_top: int) -> None:
-    """March C- with an immediate read-back control; faults jump to fail8."""
+def emit_ram(a: Asm, ram_top: int, fail: str) -> None:
+    """March C- with an immediate read-back control; faults jump to `fail`."""
     top = (ram_top << 8) - 1
 
     # Immediate write-and-read-back: does a cell take and return data at
@@ -369,7 +439,7 @@ def emit_ram(a: Asm, ram_top: int) -> None:
     a.ora(B); a.mov(B, A)
     a.label("imm3")
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("immloop")
-    a.mov(A, B); a.ora(A); a.jnz("fail8")
+    a.mov(A, B); a.ora(A); a.jnz(fail)
 
     # March C-: w0 / r0w1 up / r1w0 up / r0w1 down / r1w0 down / r0.
     a.lxi(RP_H, 0x0000)
@@ -387,7 +457,7 @@ def emit_ram(a: Asm, ram_top: int) -> None:
             a.cma()
         a.ora(A)
         a.jz(f"{tag}ok")
-        a.ora(B); a.mov(B, A); a.jmp("fail8")
+        a.ora(B); a.mov(B, A); a.jmp(fail)
         a.label(f"{tag}ok")
         a.mvi(M, write)
         if down:
@@ -398,7 +468,7 @@ def emit_ram(a: Asm, ram_top: int) -> None:
     a.lxi(RP_H, 0x0000)
     a.label("m5")
     a.mov(A, M); a.ora(A); a.jz("m5ok")
-    a.ora(B); a.mov(B, A); a.jmp("fail8")
+    a.ora(B); a.mov(B, A); a.jmp(fail)
     a.label("m5ok")
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("m5")
 

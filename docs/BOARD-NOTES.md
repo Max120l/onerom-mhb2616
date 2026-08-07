@@ -175,3 +175,34 @@ The rule: **when a count is the measurement, delimit it out-of-band.**
 Encoding the boundary in the same dimension as the data means the reader
 has to measure to know where to start counting, and readers do not measure
 — they compare.
+
+## Copying the firmware's instructions without copying its reasons
+
+The ladder eventually reported that the machine died on its first `OUT`.
+It had not. The instruction was `MVI A,82h / OUT F7h`, lifted from the
+monitor's own reset path on the reasoning that whatever the machine's
+firmware does to itself must be safe. That reasoning skipped the four
+instructions immediately above it, which are a self-modifying preamble
+that copies the *next* four bytes into RAM — because `82h` to the system
+8255's control register is a mode set, a mode set clears the port C output
+latches, PC4 is one of those latches, and PC4 is what puts the ROM in the
+address space. For four instruction bytes the PMD 85-3 has no ROM, and the
+monitor crosses that gap on a trampoline it built seconds earlier.
+
+Every image built here issued that instruction from ROM. Each one stopped
+existing on it, and each hang was read as a fault in the machine: first as
+a dead processor, then as dead memory, then as a dead port. The board's own
+report that `/CS` had gone inactive and stayed there — which is exactly
+what a deselected ROM socket should say — was filed as a symptom rather
+than as the answer.
+
+Two rules, and the second is the one that actually generalises:
+
+- **Copying a sequence out of working firmware copies its preconditions
+  too.** The four instructions you did not copy are part of the sequence.
+- **Model the machine, not the memory.** The emulator had two read maps
+  where the hardware has three, so it could not reproduce the fault and
+  every image passed in simulation. It now models the ROM leaving the
+  address space, and a test asserts both halves: that a bare mode set kills
+  a program, and that the trampoline carries it across. An instrument that
+  cannot express a failure will never find it.

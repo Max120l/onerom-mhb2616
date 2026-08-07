@@ -121,25 +121,73 @@ def test_io_stage_climbs_every_rung_on_a_good_machine():
 
 
 def test_io_stage_separates_a_dead_port_from_dead_memory():
-    """The whole reason the io stage exists.
+    """A port write that goes nowhere leaves the startup map in place.
 
-    A port write that goes nowhere leaves the startup map in place, so every
-    read keeps coming from ROM and RAM is unreachable however healthy it is.
-    The rungs below must all still pass -- the write cycle, the read cycle
-    and both OUTs completed -- and only the map check may fail.
+    Every read then keeps coming from ROM and RAM is unreachable however
+    healthy it is.  The cycles below must all still complete -- the write,
+    the read, the OUT itself -- and only the read-back check may fail.
     """
     r = run(stage="io", sticky_map=True)
-    assert r["started"] == set(range(7)), \
-        f"stopped before the map check: {r['started']}"
-    assert r["failed"] == {6}, f"blamed {r['failed']}, want the map rung"
+    assert r["started"] == set(range(5)), \
+        f"stopped before the read-back: {r['started']}"
+    assert r["failed"] == {4}, f"blamed {r['failed']}, want the map rung"
     assert not r["passed"]
 
 
-def test_io_stage_still_finds_a_real_ram_fault_last():
+def test_io_stage_still_finds_a_real_ram_fault():
     r = run(stage="io", stuck={a: (0xFF, 0x08) for a in range(0x800)})
-    assert r["started"] == set(range(N)), "did not get as far as RAM"
-    assert r["failed"] == {RAM_RUNG}, f"blamed {r['failed']}, want RAM"
+    assert r["failed"] == {5}, f"blamed {r['failed']}, want the march"
     assert r["bits"] == {3}
+
+
+def test_a_mode_set_takes_the_rom_out_of_the_machine():
+    """The lesson that cost three firmware builds, as an assertion.
+
+    `OUT F7h` with bit 7 set is an 8255 mode set.  It clears the port C
+    latches, which drops PC4, which is what puts the ROM at E000-FFFF.  A
+    program that issues it while executing from ROM does not reach its next
+    instruction.  The monitor survives only by copying that instruction
+    into RAM first (monit3B E0A3-E0B7).
+    """
+    from make_ramtest import Asm, BASE, ENTRY, A
+
+    def reached_the_end(trampoline: bool) -> bool:
+        a = Asm(BASE + ENTRY)
+        a.mvi(A, 0x00)
+        a.out(0xF4)                       # clear the startup map, keep ROM
+        if trampoline:
+            a.lxi(2, "tramp")             # RP_H
+            a.mvi(1, 4)                   # C = 4 bytes
+            a.label("copy")
+            a.mov(7, 6)                   # MOV A,M  -- from ROM
+            a.mov(6, 7)                   # MOV M,A  -- to RAM, same address
+            a.inx(2)
+            a.dcr(1)
+            a.jnz("copy")
+        a.mvi(A, 0x82)
+        a.out(0xF7)                       # <-- the ROM leaves here
+        a.label("tramp")
+        a.mvi(A, 0x09)
+        a.out(0xF7)                       # <-- ...and comes back here
+        a.mvi(A, 0xEE)
+        a.label("done")
+        a.jmp("done")
+
+        rom = bytearray(make_diag.build())
+        body = a.link()
+        rom[ENTRY:ENTRY + len(body)] = body
+        bus = Bus(bytes(rom))
+        cpu = CPU(bus)
+        for _ in range(200_000):
+            cpu.step()
+            if cpu.halted or cpu.r["A"] == 0xEE:
+                break
+        return cpu.r["A"] == 0xEE and bus.rom_visible
+
+    assert not reached_the_end(trampoline=False), \
+        "the emulator let a bare mode set survive -- it models the wrong machine"
+    assert reached_the_end(trampoline=True), \
+        "the RAM trampoline did not carry execution across the ROM drop-out"
 
 
 def test_rom_checksum_excludes_the_beacon_page():

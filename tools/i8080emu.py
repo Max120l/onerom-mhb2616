@@ -8,13 +8,35 @@ real machine. The sibling project's hardest-won lesson was that the
 instrument is wrong more often than the machine is surprising; this is the
 cheapest available defence against that.
 
-The memory model mirrors the PMD 85-3: a startup map where reads come from
-ROM everywhere and writes go to RAM, cleared by the first I/O write.
+The memory model mirrors the PMD 85-3, and the part that matters most is
+the part that is easy to get wrong. There are three read maps, not two:
+
+    startup     reads come from ROM everywhere, writes go to RAM.  This is
+                what a reset leaves behind, and it is cleared by the first
+                write to the system 8255 at F4-F7.
+    ROM/RAM     RAM 0000-DFFF, ROM E000-FFFF.  Selected by PC4 of that 8255.
+    AllRAM      RAM across all 64K.  **There is no ROM in the machine.**
+                Selected when PC4 is low.
+
+The third one is a trap. `OUT F7h` with bit 7 set is an 8255 *mode set*,
+and a mode set clears the port C output latches -- so it drops PC4 and
+takes the ROM out of the address space as a side effect. Any program that
+issues one while executing from ROM stops existing on that instruction.
+The machine's own monitor copies its next four instruction bytes into RAM
+first and executes them from there (E0A3-E0B7 of monit3B); this emulator
+models the drop-out so an image that forgets to do the same fails here
+rather than on the bench.
+
+See GPMD85Emulator src/SystemPIO.cpp WritePaging() and src/ChipMemory3.cpp
+FindPointer() for the behaviour being copied.
 """
 
 import sys
 
 PARITY = [bin(i).count("1") % 2 == 0 for i in range(256)]
+
+SYSTEM_PIO = range(0xF4, 0xF8)   # the 8255 whose PC4 decides where ROM is
+SYSTEM_CWR = 0xF7                # ...and its control register
 
 
 class Bus:
@@ -29,6 +51,10 @@ class Bus:
         self.rom = rom
         self.ram = bytearray(0x10000)
         self.startup_map = True
+        # PC4 of the system 8255: ROM at E000-FFFF when set, AllRAM when
+        # clear.  It comes up set, because until the first mode set nothing
+        # has driven port C low.
+        self.rom_visible = True
         # {address: (and_mask, or_mask)} applied on read-back: a dead bit
         # reads 0 (and_mask clears it) or 1 (or_mask sets it).
         self.stuck = stuck or {}
@@ -58,7 +84,7 @@ class Bus:
     def read(self, a: int) -> int:
         a &= 0xFFFF
         self.clock += 1
-        if self.startup_map or a >= 0xE000:
+        if self.startup_map or (self.rom_visible and a >= 0xE000):
             self.rom_reads.append(a)
             v = self.rom[a & 0x1FFF]
             if self.rom_stuck is not None:
@@ -84,8 +110,21 @@ class Bus:
         self.written_at[a] = self.clock
 
     def out(self, port: int, v: int) -> None:
-        if not self.sticky_map:
-            self.startup_map = False    # any I/O write clears it
+        self.clock += 1
+        if port not in SYSTEM_PIO or self.sticky_map:
+            return                      # other devices do not page memory
+        self.startup_map = False        # a write to this 8255 clears it
+        if port != SYSTEM_CWR:
+            return
+        if v & 0x80:
+            # Mode set.  It configures port C upper as an output *and*
+            # clears every port C latch on the way, so PC4 goes low and the
+            # ROM leaves the address space.  This is the instruction the
+            # monitor executes from a RAM trampoline, and the reason it has
+            # to.
+            self.rom_visible = False
+        elif (v >> 1) & 0x07 == 4:
+            self.rom_visible = bool(v & 0x01)      # BSR on PC4
 
 
 class CPU:

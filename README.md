@@ -52,7 +52,12 @@ that remain: [docs/MHB2616.md](docs/MHB2616.md).
 The -3 monitor is 8 KB — the machine's whole personality: startup test,
 keyboard, tape, screen, boot into BASIC. From MAME's driver: at power-up the
 monitor is read-mirrored across the entire 64 KB map (writes fall through to
-RAM), and the first I/O write clears that, leaving the monitor at E000–FFFF.
+RAM), and the first write to the system 8255 clears that, leaving the monitor
+at E000–FFFF. There is a third map too — **AllRAM**, in which the ROM is not
+in the machine at all — and landing in it by accident is easy: `OUT F7h` with
+bit 7 set is an 8255 mode set, and a mode set drops the PC4 latch that holds
+the ROM in the map. Read the memory-map section before writing an image that
+touches that port.
 The mirrors are the decoder's business, not the sockets': a board just
 answers its selects. Details and the full maps:
 [docs/PMD85-3.md](docs/PMD85-3.md).

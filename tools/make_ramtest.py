@@ -112,6 +112,7 @@ class Asm:
     def add(self, s): self.db(0x80 | s)
     def dad(self, rp): self.db(0x09 | (rp << 4))
     def inr(self, r): self.db(0x04 | (r << 3))
+    def dcr(self, r): self.db(0x05 | (r << 3))
 
     def record_fault(self, tag: str, cont: str) -> None:
         """A holds the failing bits; remember them and which third of RAM.
@@ -167,16 +168,38 @@ def build(ram_top: int = RAM_TOP) -> bytes:
     a.beacon(0)
 
     # Clear the startup mirror map.  Until this happens, reads below E000
-    # come from ROM, so no memory test is possible at all.  This is the
-    # monitor's own first I/O write, chosen because it is known safe here.
-    a.mvi(A, 0x82)
-    a.out(0xF7)
-    # ...and the second write the monitor makes, so this program initialises
-    # the machine exactly as its own firmware does.  Skipping it would leave
-    # one difference between "the monitor ran" and "the test ran", which is
-    # precisely the difference the test is trying to measure.
-    a.mvi(A, 0x09)
-    a.out(0xF7)
+    # come from ROM, so no memory test is possible at all.
+    #
+    # Any write to the system 8255 at F4-F7 clears it.  This one goes to
+    # port A, and that choice is load-bearing.  The obvious thing -- and
+    # what this file used to do -- is to copy the monitor's own sequence,
+    # `MVI A,82h / OUT F7h`.  But F7h is the control register and 82h is a
+    # mode set, and an 8255 mode set clears the port C output latches: PC4
+    # goes low, and PC4 is what puts the ROM at E000-FFFF.  The ROM
+    # therefore leaves the address space on that instruction, and the next
+    # one is fetched from RAM.  The monitor survives it only because it
+    # copies its next four bytes into RAM first and executes them from
+    # there (monit3B E0A3-E0B7).  This program did not, so every result it
+    # produced before this was measured with no ROM in the machine and the
+    # processor running on whatever DRAM happened to hold.
+    #
+    # Port A leaves port C alone, so the mirror clears and the ROM stays.
+    # Port A is an input until something configures it otherwise, so the
+    # byte lands in a latch that drives nothing.
+    a.mvi(A, 0x00)
+    a.out(0xF4)
+
+    # ...and prove it, because a test that is silently still reading ROM
+    # reports a perfect machine.  0000 in this image is C3, the entry jump;
+    # writes have gone to RAM all along, so a byte written and read back
+    # must not come back as C3.  If it does, park without beacon 1 -- the
+    # lamp then says "running, no pass yet" forever, which is true.
+    a.lxi(RP_H, 0x0000)
+    a.mvi(M, 0x5A)
+    a.mov(A, M)
+    a.cpi(0xC3)
+    a.label("nomap")
+    a.jz("nomap")
     a.beacon(1)
 
     # Paint video RAM #1 (C000-DFFF) so a human sees the program is alive
