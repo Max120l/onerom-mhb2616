@@ -91,7 +91,7 @@ static volatile uint32_t g_served;
 #define MHB_DIAG 0
 #endif
 
-#if MHB_DIAG == 3
+#if MHB_DIAG >= 3
 // How many beacons the frame blinks.  Must cover every beacon the served
 // ROM can emit; see tools/make_ramtest.py, which currently uses 0..23.
 #ifndef MHB_BEACON_PULSES
@@ -102,6 +102,16 @@ static volatile uint32_t g_served;
 // for what each one means; this firmware only counts them, deliberately --
 // the meaning belongs to the ROM being served, not to the board.
 static volatile uint32_t g_beacons;
+
+// ...and the same, sliced per pass.  The served ROM emits beacon 24 at the
+// top of every sweep, so everything between two of them is one pass's
+// verdict.  A cumulative report cannot show an intermittent fault coming
+// and going, and -- worse -- cannot show it going away once fixed.
+#define BEACON_PASS_START  24
+static volatile uint32_t g_pass_last;    // the last completed pass
+static volatile uint32_t g_pass_acc;     // the one in progress
+static volatile uint32_t g_pass_ever;    // everything, since power-on
+static volatile uint32_t g_pass_count;
 #endif
 
 #if MHB_DIAG == 2
@@ -327,11 +337,20 @@ static void __not_in_flash_func(serve_forever)(void) {
                 // One store.  Decoding it into bank+address costs two loops
                 // and belongs on core 0, which has nothing else to do.
                 g_last_idx = (uint16_t)idx;
-#elif MHB_DIAG == 3
+#elif MHB_DIAG >= 3
                 unsigned bn = (v & MHB_LUT16_BEACON_MASK)
                               >> MHB_LUT16_BEACON_SHIFT;
                 if (bn) {
-                    g_beacons |= 1u << (bn - 1);
+                    unsigned b = bn - 1;
+                    g_beacons |= 1u << b;
+                    if (b == BEACON_PASS_START) {
+                        g_pass_last = g_pass_acc;
+                        g_pass_ever |= g_pass_acc;
+                        g_pass_acc = 0;
+                        g_pass_count++;
+                    } else {
+                        g_pass_acc |= 1u << b;
+                    }
                 }
 #endif
             }
@@ -359,7 +378,68 @@ int main(void) {
     multicore_launch_core1(serve_forever);
 
 #if MHB_DIAG == 3
-    // Beacon frame: what the ROM we are serving has to say.
+    // Verdict lamp: one colour, no counting.
+    //
+    // The detailed frame this replaces was twenty-four pulses over
+    // twenty-five seconds, and it was read wrong twice -- both times
+    // producing a pattern the ROM cannot physically emit.  A frame nobody
+    // can read is not a measurement, however much information it
+    // theoretically contains, so this reports the one thing that decides
+    // the next move and reports it as a colour.
+    //
+    //   long colour = the LAST COMPLETED pass
+    //     green   RAM clean
+    //     red     hard fault: cells fail even read back immediately
+    //     blue    march fault only: they take data but do not HOLD it,
+    //             which is refresh, not memory
+    //     yellow  running, no pass finished yet (a pass takes ~20 s)
+    //     white   the program never ran at all
+    //
+    //   short blip afterwards = the same verdict over ALL passes since
+    //   power-on, so an intermittent fault that is behaving right now
+    //   still announces that it has misbehaved.  Green blip means it has
+    //   been clean every single pass.
+#if MHB_BOARD_HAS_NEOPIXEL
+    neo_init();
+#endif
+    while (true) {
+        uint32_t last = g_pass_last, ever = g_pass_ever, all = g_beacons;
+        uint32_t verdict, history;
+#define VERDICT_OF(bits)                                                   \
+        (!((all) & 1u) ? NEO_GRB(0x10, 0x10, 0x10)      /* never ran */    \
+         : (g_pass_count == 0) ? NEO_GRB(0x10, 0x10, 0x00) /* no pass yet */\
+         : ((bits) & (1u << 15)) ? NEO_GRB(0x00, 0x18, 0x00)  /* hard */   \
+         : ((bits) & (1u << 3)) ? NEO_GRB(0x00, 0x00, 0x18)   /* refresh */\
+         : NEO_GRB(0x18, 0x00, 0x00))                         /* clean */
+        verdict = VERDICT_OF(last);
+        history = VERDICT_OF(ever);
+#undef VERDICT_OF
+#if MHB_BOARD_HAS_NEOPIXEL
+        neo_put(verdict);
+        sleep_ms(2500);
+        neo_put(NEO_OFF);
+        sleep_ms(700);
+        neo_put(history);
+        sleep_ms(400);
+        neo_put(NEO_OFF);
+        sleep_ms(2000);
+#else
+        // Plain LED: long for a failing verdict, short for a clean one.
+        bool bad = (last & ((1u << 3) | (1u << 15))) != 0;
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+        sleep_ms(bad ? 2000 : 300);
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+        sleep_ms(700);
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+        sleep_ms((ever & ((1u << 3) | (1u << 15))) ? 400 : 100);
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+        sleep_ms(2000);
+#endif
+    }
+#endif // MHB_DIAG == 3
+
+#if MHB_DIAG == 4
+    // Beacon frame, in full: what the ROM we are serving has to say.
     //
     // Twenty-four pulses, beacon 0 first, long green for lit and short red
     // for dark, with a blue blink every five.  The meanings live in
@@ -405,7 +485,7 @@ int main(void) {
         sleep_ms(1500);
 #endif
     }
-#endif // MHB_DIAG == 3
+#endif // MHB_DIAG == 4
 
 #if MHB_DIAG == 2
     // Kill-address frame: the last monitor offset the processor read.

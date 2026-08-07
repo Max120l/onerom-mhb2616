@@ -29,6 +29,8 @@ Beacons, in the order the frame blinks them:
     14  fault 8000-BFFFh
     15  HARD FAULT     cells fail even when read back immediately
  16-23  D0..D7         which bits failed the immediate read-back
+    24  pass starting   emitted at the top of every sweep, so the board can
+                        report per-pass rather than cumulative results
 
 A clean machine blinks 0, 1 and 2 and nothing else, over and over.
 
@@ -200,6 +202,12 @@ def build(ram_top: int = RAM_TOP) -> bytes:
     # decoder faults fall out too: an aliased cell is found already written
     # when the march reaches it.
     a.label("pass")
+    # Announce the start of every pass.  The board uses this to slice its
+    # accumulated beacons into per-pass results: everything between one of
+    # these and the next belongs to one sweep.  Without it the report is
+    # cumulative since power-on, which cannot show an *intermittent* fault
+    # coming and going -- and cannot show it going away when fixed.
+    a.beacon(24)
     a.mvi(B, 0x00)
     a.mvi(C, 0x00)
     a.mvi(D, 0x00)
