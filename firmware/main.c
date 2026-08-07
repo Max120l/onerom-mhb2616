@@ -91,6 +91,13 @@ static volatile uint32_t g_served;
 #define MHB_DIAG 0
 #endif
 
+#if MHB_DIAG == 3
+// One bit per beacon the host program has read.  See tools/make_ramtest.py
+// for what each one means; this firmware only counts them, deliberately --
+// the meaning belongs to the ROM being served, not to the board.
+static volatile uint32_t g_beacons;
+#endif
+
 #if MHB_DIAG == 2
 // The index of the last access we served.  A machine that halts stops
 // changing it, so whatever it holds when the bus goes quiet is the last
@@ -314,6 +321,12 @@ static void __not_in_flash_func(serve_forever)(void) {
                 // One store.  Decoding it into bank+address costs two loops
                 // and belongs on core 0, which has nothing else to do.
                 g_last_idx = (uint16_t)idx;
+#elif MHB_DIAG == 3
+                unsigned bn = (v & MHB_LUT16_BEACON_MASK)
+                              >> MHB_LUT16_BEACON_SHIFT;
+                if (bn) {
+                    g_beacons |= 1u << (bn - 1);
+                }
 #endif
             }
         } else if (driving) {
@@ -338,6 +351,53 @@ int main(void) {
     build_tables();
 
     multicore_launch_core1(serve_forever);
+
+#if MHB_DIAG == 3
+    // Beacon frame: what the ROM we are serving has to say.
+    //
+    // Fifteen pulses, beacon 0 first, long green for lit and short red for
+    // dark, with a blue blink every five.  The meanings live in
+    // tools/make_ramtest.py; the short version for its RAM test is that a
+    // healthy machine lights the first three and nothing else.
+#if MHB_BOARD_HAS_NEOPIXEL
+    neo_init();
+#endif
+    while (true) {
+        uint32_t hits = g_beacons;
+#if MHB_BOARD_HAS_NEOPIXEL
+        neo_put(NEO_BOOT);
+        sleep_ms(1800);
+        neo_put(NEO_OFF);
+        sleep_ms(700);
+        for (unsigned b = 0; b < 15; b++) {
+            bool lit = (hits >> b) & 1;
+            neo_put(lit ? NEO_SERVING : NEO_GRB(0x00, 0x14, 0x00));
+            sleep_ms(lit ? 650 : 150);
+            neo_put(NEO_OFF);
+            sleep_ms(350);
+            if (b % 5 == 4 && b != 14) {
+                neo_put(NEO_BOOT);
+                sleep_ms(120);
+                neo_put(NEO_OFF);
+                sleep_ms(350);
+            }
+        }
+        sleep_ms(1500);
+#else
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+        sleep_ms(1800);
+        gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+        sleep_ms(700);
+        for (unsigned b = 0; b < 15; b++) {
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
+            sleep_ms(((hits >> b) & 1) ? 650 : 100);
+            gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
+            sleep_ms((b % 5 == 4 && b != 14) ? 800 : 350);
+        }
+        sleep_ms(1500);
+#endif
+    }
+#endif // MHB_DIAG == 3
 
 #if MHB_DIAG == 2
     // Kill-address frame: the last monitor offset the processor read.

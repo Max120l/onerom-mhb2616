@@ -69,6 +69,22 @@ uint8_t mhb_scramble_data(uint8_t byte);
 #define MHB_LUT16_BANK_SHIFT  9
 #define MHB_LUT16_BANK_MASK   (3u << MHB_LUT16_BANK_SHIFT)
 
+// Bits 11-15: beacon number plus one, or zero for an ordinary byte.
+//
+// A beacon is a read of a reserved ROM address by code running on the host
+// -- see tools/make_ramtest.py.  The board sees every read it serves, so a
+// program with no working RAM, no video and no serial port can still report
+// its findings by reading bytes it does not need.  Baking the number into
+// the table keeps the serving path free of address comparisons: the answer
+// arrives in the same word as the data.
+#define MHB_LUT16_BEACON_SHIFT  11
+#define MHB_LUT16_BEACON_MASK   (0x1Fu << MHB_LUT16_BEACON_SHIFT)
+#define MHB_BEACON_MAX          31
+
+// Where make_ramtest.py puts them: bank 3, offset 0x700 (CPU FF00).
+#define MHB_BEACON_BANK  3
+#define MHB_BEACON_ADDR  0x700
+
 typedef struct {
     // Which pair this socket's /CS belongs to: 0 = banks 0/1, 1 = banks 2/3.
     // Which pair is which is set by the mainboard's decoder and confirmed by

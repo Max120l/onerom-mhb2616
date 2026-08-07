@@ -110,9 +110,11 @@ endif()
 #   1  per-bank coverage: which banks has the machine ever read?
 #   2  kill address: the last monitor offset it read before going quiet,
 #      thirteen pulses, most significant first
-set(MHB_DIAG "0" CACHE STRING "Diagnostic frame: 0 off, 1 coverage, 2 kill address")
-if(NOT MHB_DIAG MATCHES "^[0-2]$")
-    message(FATAL_ERROR "MHB_DIAG must be 0, 1 or 2")
+#   3  beacons: what a host program serving from this board has reported
+#      by reading reserved ROM addresses -- see tools/make_ramtest.py
+set(MHB_DIAG "0" CACHE STRING "Diagnostic frame: 0 off, 1 coverage, 2 kill address, 3 beacons")
+if(NOT MHB_DIAG MATCHES "^[0-3]$")
+    message(FATAL_ERROR "MHB_DIAG must be 0, 1, 2 or 3")
 endif()
 target_compile_definitions(mhb2616 PRIVATE MHB_DIAG=${MHB_DIAG})
 

@@ -76,8 +76,14 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
         }
 
         uint8_t byte = ((present >> bank) & 1) ? banks[bank][addr] : 0xFF;
+        uint16_t beacon = 0;
+        if (bank == MHB_BEACON_BANK && addr >= MHB_BEACON_ADDR
+            && addr < MHB_BEACON_ADDR + MHB_BEACON_MAX) {
+            beacon = (uint16_t)(addr - MHB_BEACON_ADDR + 1)
+                     << MHB_LUT16_BEACON_SHIFT;
+        }
         lut[idx] = mhb_scramble_data(byte) | (drive ? MHB_LUT16_DRIVE : 0)
-                 | ((bank & 3u) << MHB_LUT16_BANK_SHIFT);
+                 | ((bank & 3u) << MHB_LUT16_BANK_SHIFT) | beacon;
     }
 }
 
