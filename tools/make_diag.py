@@ -94,6 +94,26 @@ An 8080 cannot fall over on a bad instruction; it can only stall waiting
 for READY, or sit in HOLD. So on this image "started rung N and never
 finished" -- blue x (N+1) -- names a bus cycle that never completed, and
 that is a specific enough fact to put a probe on.
+
+`--stage map` answers a narrower question still: which write, if any,
+takes the machine out of the mirrored startup map? Six candidates, least
+invasive first.
+
+    0  alive
+    1  leaves 5A at 0000 to recognise RAM by
+    2  any I/O write at all       OUT 00h, an undecoded port
+    3  8255 port A                F4h
+    4  8255 port B                F5h
+    5  8255 port C                F6h, writing 10h so PC4 stays set
+    6  8255 control register      BSR set PC4 -- a control-register write
+                                  that does NOT clear the latches
+    7  a READ of the 8255         IN F6h
+    8  none of them worked
+
+Reporting is inverted in that stage, and only there: the rung that
+"fails" is the rung that *worked*. Red x (N+1) names the write that
+cleared the mirror, red x9 means nothing did, and blue keeps its ordinary
+meaning of a cycle that never completed.
 """
 
 import argparse
@@ -122,7 +142,66 @@ BIT_BASE = 2 * N_RUNGS + 1     # beacons 19..26
 STAGES = {
     "cpu": {"emit": lambda a, t: emit(a, t), "bit_rungs": (5, 8)},
     "io": {"emit": lambda a, t: emit_io(a, t), "bit_rungs": (5,)},
+    "map": {"emit": lambda a, t: emit_map(a, t), "bit_rungs": ()},
 }
+
+
+# The `map` stage sweeps these, in this order, and reports the first one
+# that clears the startup mirror.  Ordered least invasive first.
+#
+# Port C carries the paging bits, so the one write that touches it writes
+# 10h and not 00h: PC4 is what holds the ROM in the address space, and
+# clearing that latch is the mistake this whole stage exists because of.
+MAP_CANDIDATES = [
+    ("any I/O write at all", lambda a: (a.mvi(A, 0x00), a.out(0x00))),
+    ("8255 port A, F4h", lambda a: (a.mvi(A, 0x00), a.out(0xF4))),
+    ("8255 port B, F5h", lambda a: (a.mvi(A, 0x00), a.out(0xF5))),
+    ("8255 port C, F6h", lambda a: (a.mvi(A, 0x10), a.out(0xF6))),
+    ("8255 control reg, BSR set PC4", lambda a: (a.mvi(A, 0x09), a.out(0xF7))),
+    ("a READ of the 8255", lambda a: a.inp(0xF6)),
+]
+
+
+def emit_map(a: Asm, ram_top: int) -> None:
+    """The `map` stage: which write, if any, clears the startup mirror?
+
+    The io stage established that `OUT F4h` does not, on this machine,
+    though the reference emulator says it should.  Either the real trigger
+    is narrower than that model, or the latch is stuck -- and if it is
+    stuck, the monitor cannot reach RAM either and that is the whole fault.
+    Six candidates, cheapest first, and the answer is a count.
+
+    Reporting is inverted here, deliberately and only here: a rung that
+    "fails" is a rung that *worked*.  Red x (N+1) names the write that
+    cleared the mirror, red x9 means none of them did, and blue keeps its
+    ordinary meaning of a cycle that never completed.  Sharing the lamp
+    beats inventing a seventh way to blink at somebody.
+    """
+    # ---- rung 0: alive ---------------------------------------------------
+    a.beacon(RUNG_STARTED + 0)
+
+    # ---- rung 1: leave a byte behind to recognise RAM by ------------------
+    # Writes go to RAM even under the startup map, so this lands in a cell
+    # that only becomes readable once the mirror is gone.  0000 in ROM is
+    # C3, the entry jump, so C3 coming back means the ROM is still
+    # answering and anything else means it is not.
+    a.beacon(RUNG_STARTED + 1)
+    a.lxi(RP_H, 0x0000)
+    a.mvi(M, 0x5A)
+
+    # ---- rungs 2..7: one candidate each -----------------------------------
+    for i, (_, emit_write) in enumerate(MAP_CANDIDATES):
+        n = i + 2
+        a.beacon(RUNG_STARTED + n)
+        emit_write(a)
+        a.lxi(RP_H, 0x0000)
+        a.mov(A, M)
+        a.cpi(0xC3)
+        a.jnz(f"fail{n}")                      # not the ROM: this one won
+
+    # ---- rung 8: none of them cleared it ----------------------------------
+    a.beacon(RUNG_STARTED + 8)
+    a.jmp("fail8")
 
 
 def emit_io(a: Asm, ram_top: int) -> None:

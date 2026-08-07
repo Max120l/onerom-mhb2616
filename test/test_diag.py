@@ -140,6 +140,39 @@ def test_io_stage_still_finds_a_real_ram_fault():
     assert r["bits"] == {3}
 
 
+def test_map_stage_names_whichever_write_clears_the_mirror():
+    """Every candidate must be found, not just the one the model prefers.
+
+    The stage reports inverted: the rung that "fails" is the rung that
+    worked.  Each case here makes exactly one candidate effective and
+    asserts the sweep lands on it -- so a machine that responds only to the
+    control register is distinguished from one that responds to port A,
+    which is the distinction the whole stage exists to draw.
+    """
+    cases = {
+        2: dict(map_clear_ports=(0x00,)),          # any I/O write at all
+        3: dict(map_clear_ports=(0xF4,)),          # port A
+        4: dict(map_clear_ports=(0xF5,)),          # port B
+        5: dict(map_clear_ports=(0xF6,)),          # port C
+        6: dict(map_clear_ports=(0xF7,)),          # control register
+        7: dict(map_clear_ports=(), map_clear_on_in=(0xF6,)),   # a read
+    }
+    for rung, kw in cases.items():
+        r = run(stage="map", **kw)
+        assert r["failed"] == {rung}, \
+            f"candidate {rung}: named {r['failed']}"
+        assert r["started"] == set(range(rung + 1)), \
+            f"candidate {rung}: went past the one that worked"
+
+
+def test_map_stage_says_so_when_nothing_clears_the_mirror():
+    """A latch that never clears is a finding, not a silent green."""
+    r = run(stage="map", map_clear_ports=())
+    assert r["started"] == set(range(N)), "gave up before trying them all"
+    assert r["failed"] == {8}, f"named {r['failed']}, want the none-of-them rung"
+    assert not r["passed"]
+
+
 def test_a_mode_set_takes_the_rom_out_of_the_machine():
     """The lesson that cost three firmware builds, as an assertion.
 

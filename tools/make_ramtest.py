@@ -107,6 +107,7 @@ class Asm:
     def cpi(self, v): self.db(0xFE, v)
     def lda(self, a): self.db(0x3A); self.a16(a)
     def out(self, p): self.db(0xD3, p)
+    def inp(self, p): self.db(0xDB, p)
     def adi(self, v): self.db(0xC6, v)
     def sui(self, v): self.db(0xD6, v)
     def add(self, s): self.db(0x80 | s)

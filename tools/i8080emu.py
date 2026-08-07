@@ -46,7 +46,9 @@ class Bus:
                  decay_after: int | None = None,
                  rom_stuck: tuple | None = None,
                  rom_stuck_range: tuple | None = None,
-                 sticky_map: bool = False):
+                 sticky_map: bool = False,
+                 map_clear_ports=None,
+                 map_clear_on_in=()):
         assert len(rom) == 0x2000
         self.rom = rom
         self.ram = bytearray(0x10000)
@@ -77,6 +79,15 @@ class Bus:
         # healthy it is.  This is a fault in the machine's I/O decoding, and
         # it looks exactly like dead memory unless something tests for it.
         self.sticky_map = sticky_map
+        # Which port writes clear the startup mirror.  The default is what
+        # GPMD85Emulator models -- any write to the system 8255 -- but the
+        # real machine is the authority and it has already disagreed once,
+        # so this is a knob rather than a constant.  Narrow it to model a
+        # machine that only responds to the control register, or empty it
+        # to model a latch that never clears at all.
+        self.map_clear_ports = (SYSTEM_PIO if map_clear_ports is None
+                                else map_clear_ports)
+        self.map_clear_on_in = map_clear_on_in
         self.written_at = {}
         self.clock = 0
         self.rom_reads = []
@@ -109,13 +120,20 @@ class Bus:
         self.ram[a] = v & 0xFF
         self.written_at[a] = self.clock
 
+    def inp(self, port: int) -> int:
+        self.clock += 1
+        if port in self.map_clear_on_in:
+            self.startup_map = False
+        return 0xFF
+
     def out(self, port: int, v: int) -> None:
         self.clock += 1
-        if port not in SYSTEM_PIO or self.sticky_map:
-            return                      # other devices do not page memory
-        self.startup_map = False        # a write to this 8255 clears it
-        if port != SYSTEM_CWR:
+        if self.sticky_map:
             return
+        if port in self.map_clear_ports:
+            self.startup_map = False    # a write to this 8255 clears it
+        if (port & 0x8F) != (SYSTEM_CWR & 0x8F) or port not in SYSTEM_PIO:
+            return                      # only the control register pages
         if v & 0x80:
             # Mode set.  It configures port C upper as an output *and*
             # clears every port C latch on the way, so PC4 goes low and the
@@ -371,8 +389,7 @@ class CPU:
                 self.bus.out(self.fetch(), self.r["A"])
                 return
             if op == 0xDB:
-                self.fetch()
-                self.r["A"] = 0xFF
+                self.r["A"] = self.bus.inp(self.fetch())
                 return
             if op == 0xEB:
                 self.r["H"], self.r["D"] = self.r["D"], self.r["H"]
