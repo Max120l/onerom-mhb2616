@@ -216,33 +216,39 @@ STROBES = {
 
 
 def emit_strobe(a: Asm, ram_top: int, which: str) -> None:
-    """Sixteen of one bus cycle, a quiet gap, forever.
+    """Thirty-two of one bus cycle, a quiet gap, forever.
 
     The point is the envelope.  A uniform stream of activity is hard to
-    attribute to anything; sixteen cycles followed by a millisecond of
-    silence is unmistakable, and the beacon read at the top of each burst
-    lands on the *other* socket pair -- so /CS on DS6/7 is a hardware
-    trigger for the burst that follows on the strobe under test.
+    attribute to anything; a burst followed by milliseconds of silence is
+    unmistakable, and the four marker reads at the top of each burst land
+    on the *other* socket pair -- so /CS on DS6/7 is a hardware trigger for
+    the burst that follows on the strobe under test.
 
-    memr is the control.  Reads are known to work, so if its strobe cannot
-    be found either, the probe is in the wrong place and nothing measured
-    with it means anything.
+    Timing, because getting this wrong wastes a bench session: the burst is
+    ~110-160 us and the gap ~1.9 ms at 2.048 MHz, both stretched by video
+    contention.  The first version of this nested two 256-iteration delay
+    loops without multiplying them out and produced a marker every 480 ms,
+    which at any timebase that resolves the burst is indistinguishable from
+    a machine doing nothing.  A test now bounds the period.
+
+    memr is the control, and it is the one stage whose envelope does NOT
+    appear: every instruction fetch is a memory read, so /MEMR streams
+    through the gap as well.  What it establishes is the probe -- if
+    /MEMR cannot be found, nothing measured on the other two means
+    anything.  memw and iow are genuinely quiet between bursts.
     """
     setup, op = STROBES[which]
     a.beacon(ALL_PASSED)                       # lamp: steady green = running
     setup(a)
     a.label("burst")
-    a.beacon(RUNG_STARTED + 0)                 # marker, on the other pair
-    for _ in range(16):
+    for _ in range(4):                         # marker, on the other pair
+        a.beacon(RUNG_STARTED + 0)
+    for _ in range(32):
         op(a)
-    a.mvi(B, 0x00)                             # ~1.5 ms of quiet
-    a.label("d1")
-    a.mvi(E, 0x00)
+    a.mvi(E, 0x00)                             # 256 * 15T ~ 1.9 ms
     a.label("d2")
     a.dcr(E)
     a.jnz("d2")
-    a.dcr(B)
-    a.jnz("d1")
     a.jmp("burst")
 
 

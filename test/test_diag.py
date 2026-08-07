@@ -229,10 +229,40 @@ def test_strobe_stages_burst_then_go_quiet():
         if which == "memr":
             assert not seen, "the read control performed a write"
             continue
-        assert len(seen) >= 32, f"{which}: only {len(seen)} cycles in 400k steps"
+        assert len(seen) >= 64, f"{which}: only {len(seen)} cycles in 400k steps"
         gaps = [b - a for a, b in zip(seen, seen[1:])]
         assert max(gaps) > 50 * min(gaps), \
             f"{which}: no quiet gap -- max {max(gaps)}, min {min(gaps)}"
+
+
+def test_strobe_marker_repeats_fast_enough_to_find_on_a_scope():
+    """The bug this exists for: a marker nobody can trigger on.
+
+    The first version nested two 256-iteration delay loops and fired its
+    marker every ~480 ms.  At a timebase that resolves a 100 us burst that
+    reads as a dead machine, and it cost a bench session.  Bound the period
+    in instructions, which is the only clock this emulator keeps.
+    """
+    for which in ("iow", "memw", "memr"):
+        rom = make_diag.build(stage=f"strobe-{which}")
+        bus = Bus(rom, map_clear_ports=())
+        cpu = CPU(bus)
+        marker = make_diag.BEACON_ADDR + make_diag.RUNG_STARTED
+        at, steps = [], 0
+        prev = len(bus.rom_reads)
+        for _ in range(40_000):
+            cpu.step()
+            steps += 1
+            hit = any(a == marker for a in bus.rom_reads[prev:])
+            prev = len(bus.rom_reads)
+            if hit:
+                at.append(steps)
+        periods = [b - a for a, b in zip(at, at[1:]) if b - a > 1]
+        assert periods, f"{which}: marker never repeated"
+        # ~600 instructions is about 2 ms at 2.048 MHz.  The old bug was
+        # ~130,000, which this rejects by two orders of magnitude.
+        assert max(periods) < 5_000, \
+            f"{which}: marker every {max(periods)} instructions -- too slow"
 
 
 def test_a_mode_set_takes_the_rom_out_of_the_machine():
