@@ -143,7 +143,14 @@ STAGES = {
     "cpu": {"emit": lambda a, t: emit(a, t), "bit_rungs": (5, 8)},
     "io": {"emit": lambda a, t: emit_io(a, t), "bit_rungs": (5,)},
     "map": {"emit": lambda a, t: emit_map(a, t), "bit_rungs": ()},
+    "vram": {"emit": lambda a, t: emit_vram(a, t), "bit_rungs": (), "tail": False},
 }
+for _s in ("iow", "memw", "memr"):
+    STAGES[f"strobe-{_s}"] = {
+        "emit": (lambda s: lambda a, t: emit_strobe(a, t, s))(_s),
+        "bit_rungs": (),
+        "tail": False,
+    }
 
 
 # The `map` stage sweeps these, in this order, and reports the first one
@@ -160,6 +167,83 @@ MAP_CANDIDATES = [
     ("8255 control reg, BSR set PC4", lambda a: (a.mvi(A, 0x09), a.out(0xF7))),
     ("a READ of the 8255", lambda a: a.inp(0xF6)),
 ]
+
+
+def emit_vram(a: Asm, ram_top: int) -> None:
+    """Does this machine perform a memory WRITE at all?  Ask the screen.
+
+    Everything proved so far is a read.  Rung 1 of the io stage wrote a
+    byte and could never read it back, the port writes completed as
+    instructions but nothing observable followed, and if the 8228's write
+    strobes were dead the machine would look exactly like this -- with the
+    stuck map a symptom rather than the fault.
+
+    Video RAM is the one memory whose contents are read by something other
+    than the CPU.  So paint it, in a loop, with a pattern that *moves*: a
+    still pattern is indistinguishable from power-on garbage, but nothing
+    in a dead machine animates.  If the screen crawls, memory writes work
+    and the fault is downstream in the paging latch.  If it sits there,
+    this machine cannot write to memory and nothing else matters.
+
+    No scope, no LED, no counting.  Either it moves or it does not.
+    """
+    a.beacon(ALL_PASSED)                       # lamp: steady green = running
+    a.mvi(C, 0x00)                             # frame number
+    a.label("frame")
+    a.beacon(RUNG_STARTED + 0)                 # one marker read per frame
+    a.lxi(RP_H, VRAM_BASE)
+    a.label("paint")
+    a.mov(A, L)
+    a.add(C)                                   # ...shifted by the frame
+    a.mov(M, A)
+    a.inx(RP_H)
+    a.mov(A, H)
+    a.cpi(VRAM_TOP)
+    a.jnz("paint")
+    a.inr(C)
+    a.jmp("frame")
+
+
+# The `strobe` stage: a tight loop hammering one kind of bus cycle, so the
+# strobe it should produce is trivial to find on a scope.  Each entry is
+# (setup, the operation to repeat).
+STROBES = {
+    "iow": (lambda a: a.mvi(A, 0x55), lambda a: a.out(0x00)),
+    "memw": (lambda a: (a.lxi(RP_H, 0x4000), a.mvi(A, 0x55)),
+             lambda a: a.mov(M, A)),
+    "memr": (lambda a: a.lxi(RP_H, 0x4000), lambda a: a.mov(A, M)),
+}
+
+
+def emit_strobe(a: Asm, ram_top: int, which: str) -> None:
+    """Sixteen of one bus cycle, a quiet gap, forever.
+
+    The point is the envelope.  A uniform stream of activity is hard to
+    attribute to anything; sixteen cycles followed by a millisecond of
+    silence is unmistakable, and the beacon read at the top of each burst
+    lands on the *other* socket pair -- so /CS on DS6/7 is a hardware
+    trigger for the burst that follows on the strobe under test.
+
+    memr is the control.  Reads are known to work, so if its strobe cannot
+    be found either, the probe is in the wrong place and nothing measured
+    with it means anything.
+    """
+    setup, op = STROBES[which]
+    a.beacon(ALL_PASSED)                       # lamp: steady green = running
+    setup(a)
+    a.label("burst")
+    a.beacon(RUNG_STARTED + 0)                 # marker, on the other pair
+    for _ in range(16):
+        op(a)
+    a.mvi(B, 0x00)                             # ~1.5 ms of quiet
+    a.label("d1")
+    a.mvi(E, 0x00)
+    a.label("d2")
+    a.dcr(E)
+    a.jnz("d2")
+    a.dcr(B)
+    a.jnz("d1")
+    a.jmp("burst")
 
 
 def emit_map(a: Asm, ram_top: int) -> None:
@@ -552,6 +636,16 @@ def emit_ram(a: Asm, ram_top: int, fail: str) -> None:
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("m5")
 
 
+def assemble(ram_top: int = RAM_TOP, stage: str = "cpu") -> bytes:
+    """Just the program, so a test can walk exactly it and no zero fill."""
+    spec = STAGES[stage]
+    a = Asm(BASE + ENTRY)
+    spec["emit"](a, ram_top)
+    if spec.get("tail", True):
+        emit_tail(a, spec["bit_rungs"])
+    return a.link()
+
+
 def build(ram_top: int = RAM_TOP, stage: str = "cpu") -> bytes:
     rom = bytearray(b"\x00" * ROM_SIZE)
 
@@ -559,11 +653,7 @@ def build(ram_top: int = RAM_TOP, stage: str = "cpu") -> bytes:
     head.jmp(BASE + ENTRY)
     rom[0:len(head.buf)] = head.link()
 
-    spec = STAGES[stage]
-    a = Asm(BASE + ENTRY)
-    spec["emit"](a, ram_top)
-    emit_tail(a, spec["bit_rungs"])
-    body = a.link()
+    body = assemble(ram_top, stage)
     assert ENTRY + len(body) < FILLER_OFF, "program overruns the data pages"
     rom[ENTRY:ENTRY + len(body)] = body
 

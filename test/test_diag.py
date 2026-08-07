@@ -173,6 +173,68 @@ def test_map_stage_says_so_when_nothing_clears_the_mirror():
     assert not r["passed"]
 
 
+def test_vram_stage_animates_and_needs_no_ram_reads():
+    """The screen must change between frames, on writes alone.
+
+    A still pattern is indistinguishable from power-on garbage, so the
+    stage is only worth anything if consecutive frames differ.  It also
+    has to work on a machine that can never read RAM -- which is the
+    machine it was written for -- so it must never branch on one.
+    """
+    from i8080dis import decode
+
+    rom = make_diag.build(stage="vram")
+    bus = Bus(rom, map_clear_ports=())          # the mirror never clears
+    cpu = CPU(bus)
+    lo, hi = make_diag.VRAM_BASE, (make_diag.VRAM_TOP << 8) - 1
+
+    frames = []
+    while len(frames) < 3:
+        for _ in range(2_000_000):
+            cpu.step()
+            if cpu.halted:
+                break
+        frames.append(bytes(bus.ram[lo:hi + 1]))
+    assert frames[0] != frames[1] != frames[2], "the pattern does not move"
+    assert all(any(f) for f in frames), "painted nothing at all"
+
+    # Never reads a RAM address: on the target machine every such read
+    # comes back as ROM, so branching on one would be branching on a lie.
+    # The beacon's LDA is a ROM read of the reserved page and is the point.
+    body = make_diag.assemble(stage="vram")
+    i = 0
+    while i < len(body):
+        text, n = decode(body, i)
+        assert body[i] != 0x7E, f"MOV A,M at +{i:04X}"     # the only RAM read
+        assert not text.startswith("LDAX"), f"LDAX at +{i:04X}"
+        i += n
+    assert i == len(body), "the program does not decode cleanly to its end"
+
+
+def test_strobe_stages_burst_then_go_quiet():
+    """The envelope is the measurement, so it has to actually be there."""
+    for which in ("iow", "memw", "memr"):
+        rom = make_diag.build(stage=f"strobe-{which}")
+        bus = Bus(rom, map_clear_ports=())
+        cpu = CPU(bus)
+        writes, ports = [], []
+        real_out = bus.out
+        bus.out = lambda p, v, _r=real_out: (ports.append(bus.clock), _r(p, v))
+        real_write = bus.write
+        bus.write = lambda x, v, _r=real_write: (writes.append(bus.clock),
+                                                 _r(x, v))
+        for _ in range(400_000):
+            cpu.step()
+        seen = ports if which == "iow" else writes
+        if which == "memr":
+            assert not seen, "the read control performed a write"
+            continue
+        assert len(seen) >= 32, f"{which}: only {len(seen)} cycles in 400k steps"
+        gaps = [b - a for a, b in zip(seen, seen[1:])]
+        assert max(gaps) > 50 * min(gaps), \
+            f"{which}: no quiet gap -- max {max(gaps)}, min {min(gaps)}"
+
+
 def test_a_mode_set_takes_the_rom_out_of_the_machine():
     """The lesson that cost three firmware builds, as an assertion.
 
