@@ -23,7 +23,8 @@ class Bus:
     def __init__(self, rom: bytes, stuck: dict | None = None,
                  decay_after: int | None = None,
                  rom_stuck: tuple | None = None,
-                 rom_stuck_range: tuple | None = None):
+                 rom_stuck_range: tuple | None = None,
+                 sticky_map: bool = False):
         assert len(rom) == 0x2000
         self.rom = rom
         self.ram = bytearray(0x10000)
@@ -45,6 +46,11 @@ class Bus:
         # processor executing this program at all -- which is realistic, and
         # which no ROM-resident diagnostic can ever report.
         self.rom_stuck_range = rom_stuck_range
+        # A port write that goes nowhere: the startup map never clears, so
+        # every read keeps coming from ROM and RAM is unreachable however
+        # healthy it is.  This is a fault in the machine's I/O decoding, and
+        # it looks exactly like dead memory unless something tests for it.
+        self.sticky_map = sticky_map
         self.written_at = {}
         self.clock = 0
         self.rom_reads = []
@@ -78,7 +84,8 @@ class Bus:
         self.written_at[a] = self.clock
 
     def out(self, port: int, v: int) -> None:
-        self.startup_map = False        # any I/O write clears it
+        if not self.sticky_map:
+            self.startup_map = False    # any I/O write clears it
 
 
 class CPU:

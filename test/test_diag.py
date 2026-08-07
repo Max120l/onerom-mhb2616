@@ -14,6 +14,9 @@ import make_diag                 # noqa: E402
 from i8080emu import Bus, CPU    # noqa: E402
 
 LO = make_diag.BEACON_ADDR
+N = make_diag.N_RUNGS
+IO_RUNG = N - 2
+RAM_RUNG = N - 1
 
 
 def run(ram_top=0x08, steps=3_000_000, **kw):
@@ -25,17 +28,18 @@ def run(ram_top=0x08, steps=3_000_000, **kw):
         if cpu.halted:
             break
     seen = {a - LO for a in bus.rom_reads if LO <= a <= LO + 31}
+    bit = make_diag.BIT_BASE
     return {
-        "started": {n for n in range(8) if n in seen},
-        "failed": {n - 8 for n in range(8, 16) if n in seen},
-        "passed": 16 in seen,
-        "bits": {n - 17 for n in range(17, 25) if n in seen},
+        "started": {n for n in range(N) if n in seen},
+        "failed": {n for n in range(N) if make_diag.RUNG_FAILED + n in seen},
+        "passed": make_diag.ALL_PASSED in seen,
+        "bits": {n - bit for n in range(bit, bit + 8) if n in seen},
     }
 
 
 def test_healthy_machine_climbs_every_rung():
     r = run()
-    assert r["started"] == set(range(8)), "did not reach every rung"
+    assert r["started"] == set(range(N)), "did not reach every rung"
     assert not r["failed"], f"failed rungs on a good machine: {r['failed']}"
     assert r["passed"]
     assert not r["bits"]
@@ -67,7 +71,8 @@ def test_data_bus_rung_names_the_broken_line():
         r = run(rom_stuck=(0xFF, 1 << bit), rom_stuck_range=(pat, pat + 0xFF))
         assert r["failed"] == {5}, f"D{bit}: failed {r['failed']}, want rung 5"
         assert r["bits"] == {bit}, f"D{bit}: named {r['bits']}"
-        assert 7 not in r["started"], "went on to test RAM after a bus fault"
+        assert RAM_RUNG not in r["started"], \
+            "went on to test RAM after a bus fault"
 
 
 def test_rom_sum_rung_catches_a_single_wrong_byte():
@@ -80,14 +85,30 @@ def test_rom_sum_rung_catches_a_single_wrong_byte():
 
 def test_ram_rung_is_last_and_names_its_bits():
     r = run(stuck={a: (0xFF, 0x08) for a in range(0x800)})
-    assert r["started"] == set(range(8)), "did not get as far as RAM"
-    assert r["failed"] == {7}
+    assert r["started"] == set(range(N)), "did not get as far as RAM"
+    assert r["failed"] == {RAM_RUNG}
     assert r["bits"] == {3}
 
 
 def test_unrefreshed_ram_reaches_the_ram_rung_too():
     r = run(decay_after=400)
-    assert r["failed"] == {7}, "blamed something other than RAM"
+    assert r["failed"] == {RAM_RUNG}, "blamed something other than RAM"
+
+
+def test_processor_rungs_run_before_any_write_or_port_access():
+    """Rungs 0-6 must stand on nothing but the CPU and the ROM path.
+
+    A machine whose port write goes nowhere still has a working processor,
+    and the ladder has to say so instead of stopping at the bottom.  This is
+    the fault an earlier version mislabelled: it cleared the startup map
+    inside rung 0, so a dead port read as "never executed an instruction".
+    """
+    r = run(sticky_map=True)
+    assert r["started"] == set(range(N - 1)), \
+        f"processor rungs did not run without I/O: {r['started']}"
+    assert r["failed"] == {IO_RUNG}, f"blamed {r['failed']}, want the I/O rung"
+    assert RAM_RUNG not in r["started"], "tested RAM it could not reach"
+    assert not r["passed"]
 
 
 def test_rom_checksum_excludes_the_beacon_page():

@@ -112,6 +112,15 @@ static volatile uint32_t g_pass_last;    // the last completed pass
 static volatile uint32_t g_pass_acc;     // the one in progress
 static volatile uint32_t g_pass_ever;    // everything, since power-on
 static volatile uint32_t g_pass_count;
+
+// The ladder image (tools/make_diag.py) lays its beacons out from this one
+// number: rung N started is N, rung N failed is RUNGS+N, and everything
+// passed is 2*RUNGS.  Keep the two in step.
+#ifndef MHB_DIAG_RUNGS
+#define MHB_DIAG_RUNGS  9
+#endif
+#define DIAG_FAILED(n)  (MHB_DIAG_RUNGS + (n))
+#define DIAG_ALL_PASSED (2 * MHB_DIAG_RUNGS)
 #endif
 
 #if MHB_DIAG == 2
@@ -419,6 +428,19 @@ int main(void) {
     // Blue matters as much as red: a processor that stops mid-rung reports
     // nothing at all, and "it hung in rung 2" is a different fault from
     // "rung 2 said no".
+    //
+    // The count is what carries the answer, so the frame is built to make
+    // counting impossible to get wrong.  Every group opens with a long
+    // MAGENTA marker -- a colour the lamp never uses for data -- so you
+    // never have to judge whether a gap was "the long one":
+    //
+    //   magenta, long   the count starts after this
+    //   short flashes   the count, in the verdict colour
+    //   dark, long      frame over, next marker follows
+    //
+    // An earlier version relied on flash length and gap length alone and
+    // was unreadable in practice.  A frame you cannot count is not a
+    // measurement.
 #if MHB_BOARD_HAS_NEOPIXEL
     neo_init();
 #endif
@@ -426,18 +448,18 @@ int main(void) {
         uint32_t hits = g_beacons;
         unsigned count = 0;
         uint32_t colour = NEO_GRB(0x18, 0x00, 0x00);      // green: passed
-        for (unsigned n = 0; n < 8; n++) {                // any rung failed?
-            if (hits & (1u << (8 + n))) {
+        for (unsigned n = 0; n < MHB_DIAG_RUNGS; n++) {   // any rung failed?
+            if (hits & (1u << DIAG_FAILED(n))) {
                 colour = NEO_GRB(0x00, 0x18, 0x00);       // red
                 count = n + 1;
                 break;
             }
         }
-        if (!count && !(hits & (1u << 16))) {
+        if (!count && !(hits & (1u << DIAG_ALL_PASSED))) {
             // Neither failed nor finished: it stopped somewhere.  The
             // highest rung it announced is where.
             colour = NEO_GRB(0x00, 0x00, 0x18);           // blue
-            for (unsigned n = 0; n < 8; n++) {
+            for (unsigned n = 0; n < MHB_DIAG_RUNGS; n++) {
                 if (hits & (1u << n)) {
                     count = n + 1;
                 }
@@ -454,26 +476,32 @@ int main(void) {
             neo_put(NEO_OFF);
             sleep_ms(700);
         } else {
+            neo_put(NEO_GRB(0x00, 0x10, 0x10));           // magenta marker
+            sleep_ms(1200);
+            neo_put(NEO_OFF);
+            sleep_ms(800);
             for (unsigned i = 0; i < count; i++) {
                 neo_put(colour);
-                sleep_ms(350);
+                sleep_ms(180);
                 neo_put(NEO_OFF);
-                sleep_ms(350);
+                sleep_ms(420);
             }
-            sleep_ms(2000);
+            sleep_ms(3000);                               // frame boundary
         }
 #else
+        // No colour to spare, so the marker is length: one long pulse
+        // opens the frame and the count follows as short ones.
         gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
-        sleep_ms(count ? 150 : 2500);
+        sleep_ms(count ? 1200 : 2500);
         gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
-        sleep_ms(350);
-        for (unsigned i = 1; i < count; i++) {
+        sleep_ms(800);
+        for (unsigned i = 0; i < count; i++) {
             gpio_put(GPIO_STATUS_LED, STATUS_LED_ON);
-            sleep_ms(150);
+            sleep_ms(180);
             gpio_put(GPIO_STATUS_LED, STATUS_LED_OFF);
-            sleep_ms(350);
+            sleep_ms(420);
         }
-        sleep_ms(2000);
+        sleep_ms(3000);
 #endif
     }
 #endif // MHB_DIAG == 5

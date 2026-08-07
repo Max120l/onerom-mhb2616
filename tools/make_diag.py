@@ -17,20 +17,30 @@ depends only on rungs below it:
                     exact data lines that are wrong
     6  ROM sum      all 8192 bytes summed; catches address-line faults
                     that a 256-byte table would step straight over
-    7  RAM          March C- plus an immediate read-back control
+    7  I/O          OUT F7h, clearing the startup mirror map
+    8  RAM          March C- plus an immediate read-back control
 
-Nothing above rung 7 touches RAM. There is no stack anywhere in this
-program: no CALL, no PUSH, no RET, no interrupts. Every branch is a jump
-and every variable is a register, because the whole point is to be
-trustworthy on a machine where memory is a suspect.
+Rungs 0-6 are the processor and the ROM path and nothing else: no writes,
+no RAM reads, and no I/O. The machine's first OUT is a rung of its own,
+because writing to a port is the most hardware-dependent thing the ladder
+does and it has no business sitting below the rungs that prove the CPU can
+execute at all. An earlier version cleared the mirror map inside rung 0,
+which meant a machine that died on the port write reported "the processor
+never got past its first instruction" -- true, but pointing at the wrong
+part.
+
+There is no stack anywhere in this program: no CALL, no PUSH, no RET, no
+interrupts. Every branch is a jump and every variable is a register,
+because the whole point is to be trustworthy on a machine where memory is
+a suspect.
 
 Reporting is by beacon -- a read of a reserved ROM address, which the
 board sees:
 
-     0-7   rung N started
-     8-15  rung N FAILED
-     16    every rung passed; looping
-     17-24 D0..D7, the data lines that failed rung 5 or rung 7
+     0-8   rung N started
+     9-17  rung N FAILED
+     18    every rung passed; looping
+     19-26 D0..D7, the data lines that failed rung 5 or rung 8
 
 Read it with firmware built `-DMHB_DIAG=5`:
 
@@ -54,22 +64,20 @@ PATTERN_OFF = 0x1E00           # 256 bytes, 00..FF, for the data-bus rung
 PATTERN_ADDR = BASE + PATTERN_OFF
 FILLER_OFF = 0x1DFF            # one byte, adjusted so the whole ROM sums to 0
 
-RUNG_STARTED = 0               # beacons 0..7
-RUNG_FAILED = 8                # beacons 8..15
-ALL_PASSED = 16
-BIT_BASE = 17                  # beacons 17..24
+N_RUNGS = 9
+RUNG_STARTED = 0               # beacons 0..8
+RUNG_FAILED = N_RUNGS          # beacons 9..17
+ALL_PASSED = 2 * N_RUNGS       # beacon 18
+BIT_BASE = 2 * N_RUNGS + 1     # beacons 19..26
+BIT_RUNGS = (5, 8)             # the rungs that report which bits failed
 
 
 def emit(a: Asm, ram_top: int) -> None:
     # ---- rung 0: alive ---------------------------------------------------
+    # One beacon and nothing else.  If this is the last thing the board
+    # hears, the processor fetched exactly one instruction group and
+    # stopped, and no later rung can be blamed for it.
     a.beacon(RUNG_STARTED + 0)
-
-    # Clear the startup mirror map, exactly as the monitor does.  Until this
-    # happens reads below E000 come from ROM, so no RAM rung is possible.
-    a.mvi(A, 0x82)
-    a.out(0xF7)
-    a.mvi(A, 0x09)
-    a.out(0xF7)
 
     # ---- rung 1: registers and MOV --------------------------------------
     a.beacon(RUNG_STARTED + 1)
@@ -178,8 +186,30 @@ def emit(a: Asm, ram_top: int) -> None:
     a.jnz("r6loop")
     a.mov(A, B); a.ora(A); a.jnz("fail6")
 
-    # ---- rung 7: RAM -----------------------------------------------------
+    # ---- rung 7: the first I/O write -------------------------------------
+    # Clear the startup mirror map, exactly as the monitor does.  Until this
+    # happens reads below E000 come from ROM and writes go to RAM, so no RAM
+    # rung is possible -- but nothing above this point needed it either.
+    #
+    # The check afterwards is the map itself, not memory: write a byte to
+    # 0000 and read it back.  Address 0000 in ROM holds C3, the entry jump.
+    # Reading back exactly C3 means the read still came from ROM and the OUT
+    # did not take, which is a fault in the port and not in RAM.  Anything
+    # else means the map switched; whether the value is right is rung 8's
+    # business, so only C3 fails here.
     a.beacon(RUNG_STARTED + 7)
+    a.mvi(A, 0x82)
+    a.out(0xF7)
+    a.mvi(A, 0x09)
+    a.out(0xF7)
+    a.lxi(RP_H, 0x0000)
+    a.mvi(M, 0x5A)
+    a.mov(A, M)
+    a.cpi(0xC3)
+    a.jz("fail7")
+
+    # ---- rung 8: RAM -----------------------------------------------------
+    a.beacon(RUNG_STARTED + 8)
     emit_ram(a, ram_top)
 
     # ---- everything passed ----------------------------------------------
@@ -190,10 +220,10 @@ def emit(a: Asm, ram_top: int) -> None:
     # ---- failure exits ---------------------------------------------------
     # Each parks in its own loop, re-announcing itself forever, so the board
     # keeps seeing it however long it takes anyone to look at the LED.
-    for n in range(8):
+    for n in range(N_RUNGS):
         a.label(f"fail{n}")
         a.beacon(RUNG_FAILED + n)
-        if n in (5, 7):                        # these two know which bits
+        if n in BIT_RUNGS:                     # these two know which bits
             for bit in range(8):
                 a.mov(A, B)
                 a.ani(1 << bit)
@@ -204,7 +234,7 @@ def emit(a: Asm, ram_top: int) -> None:
 
 
 def emit_ram(a: Asm, ram_top: int) -> None:
-    """March C- with an immediate read-back control; faults jump to fail7."""
+    """March C- with an immediate read-back control; faults jump to fail8."""
     top = (ram_top << 8) - 1
 
     # Immediate write-and-read-back: does a cell take and return data at
@@ -220,7 +250,7 @@ def emit_ram(a: Asm, ram_top: int) -> None:
     a.ora(B); a.mov(B, A)
     a.label("imm3")
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("immloop")
-    a.mov(A, B); a.ora(A); a.jnz("fail7")
+    a.mov(A, B); a.ora(A); a.jnz("fail8")
 
     # March C-: w0 / r0w1 up / r1w0 up / r0w1 down / r1w0 down / r0.
     a.lxi(RP_H, 0x0000)
@@ -238,7 +268,7 @@ def emit_ram(a: Asm, ram_top: int) -> None:
             a.cma()
         a.ora(A)
         a.jz(f"{tag}ok")
-        a.ora(B); a.mov(B, A); a.jmp("fail7")
+        a.ora(B); a.mov(B, A); a.jmp("fail8")
         a.label(f"{tag}ok")
         a.mvi(M, write)
         if down:
@@ -249,7 +279,7 @@ def emit_ram(a: Asm, ram_top: int) -> None:
     a.lxi(RP_H, 0x0000)
     a.label("m5")
     a.mov(A, M); a.ora(A); a.jz("m5ok")
-    a.ora(B); a.mov(B, A); a.jmp("fail7")
+    a.ora(B); a.mov(B, A); a.jmp("fail8")
     a.label("m5ok")
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("m5")
 
@@ -291,7 +321,7 @@ def main() -> int:
     args = ap.parse_args()
     rom = build(args.ram_top)
     args.output.write_bytes(rom)
-    print(f"wrote {args.output}: {len(rom)} bytes, 8 rungs, "
+    print(f"wrote {args.output}: {len(rom)} bytes, {N_RUNGS} rungs, "
           f"beacons at {BEACON_ADDR:04X}")
     return 0
 

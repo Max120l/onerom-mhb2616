@@ -149,3 +149,29 @@ diagnostic builds, which serve no timing budget worth defending.
 
 The general rule: **an edge is not an event.** If an instrument counts
 edges, be certain the thing being measured produces exactly one.
+
+## A count needs a marker, not a longer gap
+
+The lamp has now failed to be readable twice, in two different ways, and
+the second failure is worth writing down separately because the first fix
+did not prevent it.
+
+The 24-pulse frame failed because it carried too much. The replacement
+carried one number — how many rungs the ladder climbed — and still came
+back as *"looks like blue ×1, but I'm not sure how quick is the rung count
+vs the group"*. The flashes were 350 ms on, 350 ms off, with a 2000 ms gap
+between frames, and the reader was being asked to distinguish a gap from a
+gap. That is a judgement about *duration*, made from memory, with nothing
+to compare against.
+
+The fix is a **marker in a different channel**: every frame now opens with
+a long magenta pulse, a colour the count itself never uses, and the count
+follows as short flashes. Nobody has to time anything; the frame boundary
+announces itself. Where there is only one channel — the plain status LED —
+the marker is a long pulse against short ones, which is the same trick in
+the only dimension available.
+
+The rule: **when a count is the measurement, delimit it out-of-band.**
+Encoding the boundary in the same dimension as the data means the reader
+has to measure to know where to start counting, and readers do not measure
+— they compare.
