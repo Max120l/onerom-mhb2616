@@ -23,6 +23,12 @@
 //
 //   HOTSPOT switches whole banks at runtime, which a baked table cannot
 //   express; it keeps four 8-bit tables and a mask compare for gating.
+//
+// MODULE serves a different board entirely: the BASIC ROM module, DOSKA ROM
+// PAMATI 1 PK 280 53, whose sockets are plain JEDEC 2716 and whose bank
+// select lives on the module's own 7442 rather than on any socket pin.  It
+// reuses the 16-bit table unchanged in shape, because there too every input
+// to the drive decision fits inside the index.  See docs/ROM-module.md.
 
 #ifndef DECODE_H
 #define DECODE_H
@@ -119,6 +125,51 @@ typedef struct {
 // in a machine that means the real chip for that bank keeps its socket.
 void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
                      uint8_t present, const mhb_lut16_cfg_t *cfg);
+
+// ---------------------------------------------------------------------------
+// MODULE mode: the BASIC ROM module's 16 KB window
+// ---------------------------------------------------------------------------
+
+// The module's sockets carry A0-A10 and nothing else of the address; A11-A13
+// are the 7442's three inputs, A14 is stolen for the read strobe, and A15
+// parks the decoder.  So the window is 16 KB in eight 2 KB banks, and the
+// board learns the bank from the decoder's inputs rather than its outputs --
+// three leads instead of five, which is what makes it fit.
+#define MHB_MODULE_BANKS  8
+
+// Where each of those lands.  Four leads; the fifth input is already in the
+// socket.  Full wiring, and why pin 18 must be lifted, in docs/ROM-module.md.
+//
+//   socket pin 20   /OE    the module's read strobe (PC6)   -- no lead
+//   socket pin 21   A11    from IO2 pin 15 (PC3)            -- pin 21 is NC
+//   X1 pad          A12    from IO2 pin 14 (PC4)
+//   X2 pad          A13    from IO2 pin 13 (PC5)
+//   socket pin 18   park   from IO2 pin 12 (PC7)            -- lift pin 18
+//
+// Every one of these is pulled UP in MODULE builds, which makes a detached
+// harness silent rather than wrong: park reads "decoder off", and the three
+// address leads read bank 7, which no BASIC image occupies.
+#define MHB_IDX_MOD_nOE   MHB_IDX_nCS
+#define MHB_IDX_MOD_A11   MHB_IDX_PIN21
+#define MHB_IDX_MOD_A12   MHB_IDX_X1
+#define MHB_IDX_MOD_A13   MHB_IDX_X2
+#define MHB_IDX_MOD_PARK  MHB_IDX_PR
+
+// Eight banks need three bits where the monitor modes needed two, so MODULE
+// entries carry the bank in bits 9-11 and never set a beacon -- bit 11 is
+// the beacon field's low bit, and the two cannot coexist in one entry.  No
+// build uses both: beacons report from code running in the CPU's address
+// space, and the module is not in it.  The host test asserts the overlap
+// stays theoretical by checking MODULE entries never set bits 12-15.
+#define MHB_LUT16_MOD_BANK_SHIFT  9
+#define MHB_LUT16_MOD_BANK_MASK   (7u << MHB_LUT16_MOD_BANK_SHIFT)
+
+// Fill the table for MODULE mode.  `banks` must hold MHB_MODULE_BANKS banks;
+// `present` marks which of them carry image data.  Absent banks are never
+// driven, so the machine reads them as the floating bus does -- 0xFF, which
+// is exactly what an unpopulated module socket gives it.
+void mhb_build_lut16_module(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
+                            uint8_t present);
 
 // ---------------------------------------------------------------------------
 // The 8-bit-entry table: HOTSPOT mode

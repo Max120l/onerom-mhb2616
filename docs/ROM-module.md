@@ -131,6 +131,72 @@ Two things this is worth remembering for:
   a floating bus, a bad contact — would carry no such structure, and
   distinguishing the two is exactly what tells a dead chip from a bad read.
 
+## The boot contract
+
+**Read off `monit3B.rom` by disassembly; not yet confirmed on hardware.**
+
+Two things had to be established before anything could be served here, and
+both are in the monitor rather than on the card.
+
+**The ports are aliased.** The module's 8255 answers at `88h–8Bh` in every
+description of the machine, and the monitor never touches those addresses.
+It uses **`F8h–FBh`**, which the module's own decode (`port & 8Ch == 88h`)
+maps to the same chip: `F8h` port A (data in), `F9h` port B (address low),
+`FAh` port C (address high), `FBh` control. The system 8255 at `F4h–F7h`
+sits just below and does *not* match that decode. Searching a monitor for
+`88h` finds nothing and proves nothing.
+
+**The block-read routine is at `EC00h`**, and it takes its arguments inline
+after the `CALL`: source address (2), byte count (2), destination (2). It
+programs the 8255 with `90h` — port A input, B and C output — writes the
+address, then reads bytes with the strobe *held*, incrementing the address
+through the ports themselves. It ends with `MVI A,FFh / OUT FAh`, which
+parks the card: that single store raises PC7 (decoder off) and PC6 (`/OE`
+off) together, and it is why the firmware treats both as gates.
+
+That the strobe is held rather than pulsed per byte is the detail the serve
+loop depends on. The board gates on a level, exactly as the chip did.
+
+### The module gets to run its own code at boot
+
+At `E02D`, in the reset path, the monitor does this:
+
+```
+E02D  CD 00 EC   CALL EC00h        ; block read...
+      00 00                        ;   from module 0x0000
+      0D 00                        ;   count field 0x000D
+      B2 C1                        ;   to RAM C1B2
+E036  3A B2 C1   LDA C1B2h
+E039  FE CC      CPI CCh           ; signature?
+E03B  CA B2 C1   JZ  C1B2h         ; ...then execute it
+```
+
+**The module's first bytes are copied into RAM and jumped to if the first is
+`CCh`.** Fourteen of them, not thirteen: the loop pre-increments the count's
+high byte (`INR B`) and then tests only that byte, so it transfers
+`count + 1`. Worth pinning down rather than reading off the field, because
+it is the size of the budget a module gets to bootstrap itself in.
+
+BASIC-G 3.0 spends twelve of the fourteen: 
+
+```
+CC 00 EC        CZ EC00h      ; signature AND instruction
+00 24 01 04 00 B8             ;   module 0x2400, 1 KB, to B800
+C3 00 B8        JMP B800h     ; run what was just loaded
+```
+
+The signature byte is doing double duty and it is worth admiring: `CCh` is
+`CZ`, call-if-zero, and the Z flag is guaranteed set because the very `CPI
+CCh` that validated the signature set it. So the byte that identifies the
+module is also the instruction that bootstraps it. The stub copies its
+second stage to `B800h` — the 1 KB at `B800h` that `basic3.txt` documents as
+BASIC's second destination — and jumps in.
+
+The consequence is larger than BASIC: **a ROM module chooses what the
+machine runs, in thirteen bytes, with the monitor's own loader available at
+`EC00h` to pull in as much more as it wants.** Anything that fits the window
+can be booted this way. See ROADMAP.md for what that opens up.
+
 ## Substituting 2732s
 
 **Untested on hardware; the reasoning is from the wiring above.**
@@ -155,23 +221,55 @@ active low and both required, which is 2732 read behaviour unchanged.
 
 ## Serving the whole module from one board
 
-**A sketch, not a built thing.** A One ROM board in one socket already sees
-A0–A10, `/OE` on pin 18's neighbour, its own `/CSn`, and the data bus. What
-it cannot see is which *other* socket is being addressed — but it does not
-need five more wires to find out, because the 7442's three address inputs
-carry the same information: PC3, PC4, PC5 on IO2 pins 15, 14, 13.
+`MHB_BANK_SOURCE=MODULE`. **Built and host-tested; not yet run on
+hardware.** A board in any one socket already sees A0–A10, `/OE` on pin 20
+and the data bus. What it cannot see is which *other* socket an access is
+for — and the cheap way to learn that is to read the 7442's three address
+inputs rather than its five outputs.
 
-Three flying leads, and the board knows the full bank number. Better, this
-card leaves socket pin 21 unconnected, so one of the three can land on the
-board's existing pin-21 input by soldering to an otherwise dead socket pad;
-X1 and X2 take the other two. One board would then answer for all five
-chips including the one that is missing, with the module's microsecond
-access times leaving the serve loop nothing to worry about.
+| board input | socket pin | carries | lead from |
+|-------------|-----------|---------|-----------|
+| `GPIO_nCS` | 20 | `/OE`, the read strobe | — already in the socket |
+| `GPIO_PIN21` | 21 | module A11 | IO2 pin 15 (PC3) |
+| `GPIO_X1` | — | module A12 | IO2 pin 14 (PC4) |
+| `GPIO_X2` | — | module A13 | IO2 pin 13 (PC5) |
+| `GPIO_PR` | 18 | park (A15) | IO2 pin 12 (PC7) |
 
-What this needs that does not exist yet is a mode: gate on `/OE` low, take
-the bank from the three decode inputs rather than from PR, and ignore the
-socket's own `/CSn` entirely. Recorded so the idea is not rediscovered from
-scratch.
+Four leads. Socket pin 21 is unconnected on this card, so PC3's lead can be
+soldered to that dead pad and reach the board through the socket with no
+board-side work at all. **Pin 18 is the one modification**: it carries
+`/CS0`, which MODULE mode does not use, so the board's pin 18 must be kept
+out of the socket and the PC7 lead landed on it directly.
+
+Park matters as much as the address bits. The monitor ends every block read
+by writing `FFh` to port C, and a board that ignored PC7 would answer reads
+the machine expects to come back `FFh` — including whatever probes the
+`A15` convention exists for.
+
+All four leads are **pulled up** in MODULE builds, which is what makes a
+harness that has fallen off safe rather than wrong: park reads "decoder
+off" and the address leads read bank 7, which no BASIC image occupies. A
+broken wire produces a silent board and a red pixel, not a wrong byte.
+`test_module_detached_harness` asserts exactly that.
+
+One board therefore answers for all five chips, including the one this
+module is missing — and the module's microsecond access times leave the
+serve loop nothing to worry about.
+
+### Building it
+
+```
+cd tools
+./gen_rom_images.py -o ../firmware/rom_images.c --module basic3.rmm
+cd ../firmware && mkdir -p build && cd build
+cmake .. -DMHB_BOARD=FIRE24F -DMHB_BANK_SOURCE=MODULE
+make
+```
+
+The generated image carries a `_Static_assert` on its own bank count, so a
+module image built into a monitor firmware (or the reverse) is a compile
+error naming both numbers rather than a board that serves a quarter of the
+window.
 
 ## Sources
 

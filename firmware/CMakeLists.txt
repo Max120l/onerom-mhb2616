@@ -44,13 +44,18 @@ endif()
 #   FULL8K   all four banks -- one flying lead (other pair's /CS to X1)
 #   HOTSPOT  four images of one bank, switched by magic reads -- for
 #            hotspot-aware software only
+#   MODULE   the BASIC ROM module's whole 16 KB window, eight banks, four
+#            flying leads to the module's own 7442 -- a different card
+#            entirely; see docs/ROM-module.md
 set(MHB_BANK_SOURCE "STATIC" CACHE STRING
-    "Bank source: STATIC, PAIR, FULL8K or HOTSPOT")
-set_property(CACHE MHB_BANK_SOURCE PROPERTY STRINGS STATIC PAIR FULL8K HOTSPOT)
-if(NOT MHB_BANK_SOURCE MATCHES "^(STATIC|PAIR|FULL8K|HOTSPOT)$")
-    message(FATAL_ERROR "MHB_BANK_SOURCE must be STATIC, PAIR, FULL8K or HOTSPOT")
+    "Bank source: STATIC, PAIR, FULL8K, HOTSPOT or MODULE")
+set_property(CACHE MHB_BANK_SOURCE PROPERTY STRINGS
+    STATIC PAIR FULL8K HOTSPOT MODULE)
+if(NOT MHB_BANK_SOURCE MATCHES "^(STATIC|PAIR|FULL8K|HOTSPOT|MODULE)$")
+    message(FATAL_ERROR
+        "MHB_BANK_SOURCE must be STATIC, PAIR, FULL8K, HOTSPOT or MODULE")
 endif()
-foreach(src STATIC PAIR FULL8K HOTSPOT)
+foreach(src STATIC PAIR FULL8K HOTSPOT MODULE)
     if(MHB_BANK_SOURCE STREQUAL src)
         target_compile_definitions(mhb2616 PRIVATE MHB_BANK_${src}=1)
     else()

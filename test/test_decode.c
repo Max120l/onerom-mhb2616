@@ -275,10 +275,104 @@ static void test_lut8_and_masks(void) {
     CHECK(mask == (1u << GPIO_nCS) && val == 0, "mask: ignore_pr wrong");
 }
 
+// ---------------------------------------------------------------------------
+// MODULE mode: the BASIC ROM module's 16 KB window
+// ---------------------------------------------------------------------------
+
+static uint8_t mod_banks[MHB_MODULE_BANKS][MHB_BANK_SIZE];
+
+// The index a module access produces.  /OE is active low, park is active
+// high, and the three bank leads are plain levels of module A11-A13.
+static uint16_t module_idx(unsigned addr, unsigned bank, bool oe_low,
+                           bool parked) {
+    uint16_t idx = mhb_index_of(addr);
+    if (!oe_low)  idx |= MHB_IDX_MOD_nOE;
+    if (parked)   idx |= MHB_IDX_MOD_PARK;
+    if (bank & 1) idx |= MHB_IDX_MOD_A11;
+    if (bank & 2) idx |= MHB_IDX_MOD_A12;
+    if (bank & 4) idx |= MHB_IDX_MOD_A13;
+    return idx;
+}
+
+static void test_lut16_module(void) {
+    // Five banks present: the window as BASIC-G 3.0 leaves it, 10 KB of
+    // image and three banks of nothing.
+    const uint8_t present = 0x1F;
+    mhb_build_lut16_module(lut16, mod_banks, present);
+
+    for (unsigned bank = 0; bank < MHB_MODULE_BANKS; bank++) {
+        for (unsigned a = 0; a < MHB_BANK_SIZE; a += 149) {
+            bool here = ((present >> bank) & 1) != 0;
+
+            uint16_t e = lut16[module_idx(a, bank, true, false)];
+            CHECK(!!(e & MHB_LUT16_DRIVE) == here,
+                  "module: bank %u addr %04X drive %d, expected %d",
+                  bank, a, !!(e & MHB_LUT16_DRIVE), (int)here);
+            uint8_t want = here ? fill(bank, a) : 0xFF;
+            CHECK((e & 0xFF) == mhb_scramble_data(want),
+                  "module: bank %u addr %04X data wrong", bank, a);
+
+            // A high strobe and a parked decoder must each be enough on
+            // their own to keep the board off the bus.
+            CHECK(!(lut16[module_idx(a, bank, false, false)] & MHB_LUT16_DRIVE),
+                  "module: drove with /OE high, bank %u addr %04X", bank, a);
+            CHECK(!(lut16[module_idx(a, bank, true, true)] & MHB_LUT16_DRIVE),
+                  "module: drove while parked, bank %u addr %04X", bank, a);
+            CHECK(!(lut16[module_idx(a, bank, false, true)] & MHB_LUT16_DRIVE),
+                  "module: drove parked and /OE high, bank %u addr %04X",
+                  bank, a);
+
+            CHECK(((e & MHB_LUT16_MOD_BANK_MASK) >> MHB_LUT16_MOD_BANK_SHIFT)
+                      == bank,
+                  "module: bank field wrong for bank %u", bank);
+            // The three-bit bank field reaches into the beacon field's low
+            // bit.  No module entry may carry a beacon; assert the overlap
+            // stays theoretical rather than trusting that it does.
+            CHECK((e & 0xF000u) == 0,
+                  "module: entry set a beacon bit, bank %u addr %04X", bank, a);
+        }
+    }
+}
+
+static void test_module_detached_harness(void) {
+    // Every module lead is pulled up in MODULE builds, so a harness that has
+    // come off reads all ones: parked, and bank 7.  Each must independently
+    // mean silence -- this is what makes a broken wire safe, not wrong.
+    mhb_build_lut16_module(lut16, mod_banks, 0x1F);
+    for (unsigned a = 0; a < MHB_BANK_SIZE; a += 211) {
+        uint16_t idx = mhb_index_of(a) | MHB_IDX_MOD_A11 | MHB_IDX_MOD_A12
+                     | MHB_IDX_MOD_A13 | MHB_IDX_MOD_PARK;
+        CHECK(!(lut16[idx] & MHB_LUT16_DRIVE),
+              "module: drove with the whole harness detached, addr %04X", a);
+        CHECK(!(lut16[module_idx(a, 7, true, false)] & MHB_LUT16_DRIVE),
+              "module: drove for absent bank 7, addr %04X", a);
+    }
+}
+
+static void test_module_full_window(void) {
+    // All eight banks present: the whole 16 KB servable, which is what an
+    // image beyond BASIC's 10 KB will want.
+    mhb_build_lut16_module(lut16, mod_banks, 0xFF);
+    for (unsigned bank = 0; bank < MHB_MODULE_BANKS; bank++) {
+        for (unsigned a = 0; a < MHB_BANK_SIZE; a += 307) {
+            uint16_t e = lut16[module_idx(a, bank, true, false)];
+            CHECK(e & MHB_LUT16_DRIVE,
+                  "module: full window not driven, bank %u addr %04X", bank, a);
+            CHECK((e & 0xFF) == mhb_scramble_data(fill(bank, a)),
+                  "module: full window data wrong, bank %u addr %04X", bank, a);
+        }
+    }
+}
+
 int main(void) {
     for (unsigned b = 0; b < MHB_BANKS; b++) {
         for (unsigned a = 0; a < MHB_BANK_SIZE; a++) {
             banks[b][a] = fill(b, a);
+        }
+    }
+    for (unsigned b = 0; b < MHB_MODULE_BANKS; b++) {
+        for (unsigned a = 0; a < MHB_BANK_SIZE; a++) {
+            mod_banks[b][a] = fill(b, a);
         }
     }
     lut16 = malloc(MHB_LUT_SIZE * sizeof(uint16_t));
@@ -292,6 +386,9 @@ int main(void) {
     test_full8k_sweep();
     test_lut16_static();
     test_lut8_and_masks();
+    test_lut16_module();
+    test_module_detached_harness();
+    test_module_full_window();
 
     if (g_failures) {
         printf("%u failure(s)\n", g_failures);

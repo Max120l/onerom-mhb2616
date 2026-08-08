@@ -89,6 +89,48 @@ between monitor variants (stock, patched, diagnostic) without reflashing.
 Design constraint recorded now: hotspots default to 0x7F4–0x7F7 of the
 window, so hotspot-aware images must keep those four bytes free.
 
+## 8. MODULE: the BASIC ROM module from one board
+
+**Question: does the board serve a card it was never designed for?**
+
+Built and host-tested; not yet run on hardware. `MHB_BANK_SOURCE=MODULE`,
+four flying leads to the module's own 7442, one board in place of five
+chips — of which this machine has only four, so the module cannot be
+repaired any other way. Acceptance test: the machine boots BASIC-G 3.0.
+
+Independent of rungs 4–6: a different card, whose faults cannot mask
+theirs. Wiring, the pin-18 modification, and the build line are in
+docs/ROM-module.md.
+
+## 9. A boot menu in the module — *after 8*
+
+The monitor hands a ROM module the whole machine, and does it in fourteen
+bytes: at `E02D` it copies the module's first bytes to `C1B2` and jumps to
+them if the first is `CCh`, with its own block-read routine at `EC00h`
+available to pull in as much more as the stub asks for. BASIC's stub spends
+twelve of them loading 1 KB to `B800h` and jumping. Disassembly, and why
+the count is fourteen rather than the thirteen the field says, in
+docs/ROM-module.md.
+
+So a menu is a stub, a first stage, and a table of programs. The binding
+constraint is the window, not the flash:
+
+- **The window is 16 KB.** A0–A10 from the socket and A11–A13 from the
+  7442 is all this card can express — A14 is the read strobe and A15 parks
+  the decoder. Everything the machine can see at one time lives in 16 KB.
+- **Flash is not the limit.** Anything beyond 16 KB has to be paged into
+  that window: the HOTSPOT idea of rung 7 applied to a different card, with
+  the loader reading reserved module addresses to ask for slot *n* and then
+  reading the program out of the window normally.
+- **The loader runs from RAM**, because the monitor copies it there before
+  executing it. So it can page the window under its own feet without losing
+  itself — which a monitor-socket hotspot image can never safely do. This
+  card is a friendlier place for banked software than the sockets are.
+
+Gates in order: rung 8 first, since a menu on unproven serving is two
+unknowns at once; then a stub that boots one thing other than BASIC; then
+paging. Each answers a question the next one assumes.
+
 ## Parked
 
 - **Upstreaming to One ROM.** A "2616 in the PMD 85-3" chip type — /CS on

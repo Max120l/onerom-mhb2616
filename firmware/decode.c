@@ -87,6 +87,28 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
     }
 }
 
+void mhb_build_lut16_module(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
+                            uint8_t present) {
+    for (uint32_t idx = 0; idx < MHB_LUT_SIZE; idx++) {
+        unsigned addr = mhb_addr_from_index((uint16_t)idx);
+        unsigned bank = ((idx & MHB_IDX_MOD_A11) ? 1u : 0u)
+                      | ((idx & MHB_IDX_MOD_A12) ? 2u : 0u)
+                      | ((idx & MHB_IDX_MOD_A13) ? 4u : 0u);
+
+        // Gate exactly as the chip being replaced: outputs on while the read
+        // strobe is low, and nothing at all while the decoder is parked.  The
+        // monitor parks by writing FFh to port C after every block read
+        // (monit3B, EC2D), which raises both bits in one store.
+        bool here = ((present >> bank) & 1) != 0;
+        unsigned drive = !(idx & MHB_IDX_MOD_nOE)
+                      && !(idx & MHB_IDX_MOD_PARK) && here;
+
+        uint8_t byte = here ? banks[bank][addr] : 0xFF;
+        lut[idx] = mhb_scramble_data(byte) | (drive ? MHB_LUT16_DRIVE : 0)
+                 | ((bank & 7u) << MHB_LUT16_MOD_BANK_SHIFT);
+    }
+}
+
 void mhb_build_lut8(uint8_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
                     uint8_t present, unsigned bank) {
     bank &= 3;

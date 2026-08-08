@@ -37,6 +37,12 @@
 //   HOTSPOT  Reads of magic addresses in the served window switch between
 //            four images of this socket's bank.  Zero wires; only software
 //            written to touch the hotspots can steer it.
+//   MODULE   Not a monitor socket at all: the BASIC ROM module (DOSKA ROM
+//            PAMATI 1 PK 280 53), whose sockets are plain JEDEC 2716 and
+//            whose 16 KB window is eight 2 KB banks selected by a 7442.
+//            Four leads bring the decoder's own inputs to the board, which
+//            then answers for every socket on the card at once.  See
+//            docs/ROM-module.md.
 //
 // STATIC, PAIR and FULL8K bake the entire drive decision into a 16-bit-entry
 // table (bit 8 = drive), because every input to that decision lives inside
@@ -70,7 +76,8 @@
 #define MHB_SYS_CLK_KHZ  150000
 #endif
 
-#if (MHB_BANK_STATIC + MHB_BANK_PAIR + MHB_BANK_FULL8K + MHB_BANK_HOTSPOT) != 1
+#if (MHB_BANK_STATIC + MHB_BANK_PAIR + MHB_BANK_FULL8K + MHB_BANK_HOTSPOT \
+     + MHB_BANK_MODULE) != 1
 #error "exactly one bank source; use the CMake MHB_BANK_SOURCE option"
 #endif
 
@@ -89,6 +96,14 @@ static volatile uint32_t g_served;
 
 #ifndef MHB_DIAG
 #define MHB_DIAG 0
+#endif
+
+#if MHB_BANK_MODULE && MHB_DIAG
+// The diagnostics assume a monitor socket.  Beacons are reads of reserved
+// addresses by code running in the CPU's address space, and the ROM module
+// is not in it; the coverage build's bank field is two bits wide where
+// MODULE needs three.  Refusing is better than reporting bank 5 as bank 1.
+#error "MHB_DIAG does not apply to MHB_BANK_SOURCE=MODULE"
 #endif
 
 #if MHB_DIAG >= 3
@@ -198,7 +213,20 @@ static void setup_gpio(void) {
     gpio_pull_up(GPIO_X1);
     gpio_init(GPIO_X2);
     gpio_set_dir(GPIO_X2, GPIO_IN);
+#if MHB_BANK_MODULE
+    // MODULE carries real signals on both pads, on socket pin 21, and on
+    // pin 18 -- all four by flying lead.  Pull every one of them UP, which
+    // is the level that makes a lead that has fallen off harmless: park
+    // reads "decoder off" so the board goes silent, and the three address
+    // leads read bank 7, which no BASIC image occupies.  A broken harness
+    // therefore serves nothing rather than serving the wrong bank, and the
+    // status pixel says so by staying red.
+    gpio_pull_up(GPIO_X2);
+    gpio_pull_up(GPIO_PIN21);
+    gpio_pull_up(GPIO_PR);
+#else
     gpio_pull_down(GPIO_X2);
+#endif
 
 #if !MHB_BOARD_HAS_NEOPIXEL
     gpio_init(GPIO_STATUS_LED);
@@ -263,6 +291,11 @@ static void build_tables(void) {
     unsigned bank = MHB_SOCKET_BANK & 3u;
     bool pr_high = ((bank & 1) ^ (MHB_PR_INVERT ? 1u : 0u)) != 0;
     mhb_select_masks(false, pr_high, &g_sel_mask, &g_sel_val);
+#elif MHB_BANK_MODULE
+    // No socket-side configuration at all: the bank arrives on the leads and
+    // the gating is the module's own strobe.  Nothing here is per-socket,
+    // which is the point -- one board answers for the whole card.
+    mhb_build_lut16_module(g_lut16, mhb_banks, mhb_bank_present);
 #else
     mhb_lut16_cfg_t cfg = {
         .socket_pair = MHB_SOCKET_PAIR,
