@@ -387,12 +387,39 @@ invisible margin of VRAM line 127 — the same margin trick the monitor
 itself uses for its variables — so a cartridge may load anywhere in
 `0000–BFFF` without the loader's stack in its way.
 
+**PMD 85-2 cartridges ride the machine's own compatibility switch.** The
+-3 monitor's `JMP FFF0h` is a documented way into PMD 85-2 mode, and what
+it actually does (disassembled, then executed in the emulator) is worth
+admiring: it copies the monitor's own first 4 KB down into RAM at `8000h`
+and runs a table-driven relocation over it — `E0xx` address bytes become
+`80xx`, and the module-boot check itself is rewritten from `CALL EC00h /
+CPI CCh` to `CALL 8C00h / CPI CDh`. The -2 monitor is *embedded in the
+-3's*, manufactured on demand; diffed against the archive's real dumps it
+is monit2B-lineage (76 bytes apart, against 210–313 for the others). That
+also closes a loose end from the shelf work: -2 module stubs open with
+`CALL 8C00h` because `EC00h − 6000h = 8C00h`, the same block-read routine
+at its relocated address, same ABI to the byte.
+
+So an `rmm2` entry needs no firmware change at all: the menu touches the
+page's hotspot, waits, and jumps `FFF0h` instead of replaying `E02D`. The
+-3 monitor relocates itself, lands at `8000h`, goes AllRAM through its own
+(relocated) trampoline, finds the `CDh` stub on the mapped page at `802D`,
+and boots it by the full -2 convention. The emulator runs that entire
+chain against the real monit3B — menu keypress to BASIC 2A's first
+instruction at `0000h`, 9204 payload bytes verified.
+
+Reset from a -2 cartridge is the one asymmetry: the -3 monitor reads
+`CDh`, refuses it, and falls to its prompt with the page still mapped —
+where `JUMP FFF0` relaunches the cartridge by hand. A power cycle returns
+to the menu, as ever.
+
 Manifest, and what the tool enforces:
 
 ```json
 {"name": "shelf",
  "entries": [
    {"type": "rmm",    "name": "BASIC-G 3.0", "file": "basic3.rmm"},
+   {"type": "rmm2",   "name": "BASIC 2A",    "file": "basic2A.rmm"},
    {"type": "binary", "name": "SOME GAME",   "file": "game.bin",
     "load": "0x2000", "exec": "0x2000"},
    {"type": "demo",   "name": "TEST CARD"}
@@ -400,9 +427,14 @@ Manifest, and what the tool enforces:
 ```
 
 - at most 16 entries (keys `1–9`, `0`, `A–F`), 32 pages;
-- an rmm must start with `CCh` — of the RM-TEAM archive's module images
-  only `basic3.rmm` does; the others carry the PMD 85-1/2 convention
-  (`CALL 8C00h`) and cannot boot a -3;
+- an `rmm` must start with `CCh`, an `rmm2` with `CDh` — the tool names
+  the right type when handed the wrong generation. Of the RM-TEAM
+  archive's module images, `basic3.rmm` boots a -3; `basic2.rmm`,
+  `basic2A.rmm`, `mrs2.rmm` and `booter2-pmd85-pmd32.rmm` are `rmm2`
+  material. The rest (`sach1`, `kli2`, `wurmi`, `demo0`…) have no boot
+  stub of either kind — they were loaded by other software, typically
+  BASIC's module commands, and need their native loader on the same page:
+  future work;
 - a binary must fit one page (~16.2 KB) and load inside `0000–BFFF`;
   bigger or multi-segment programs are future work;
 - `demo` generates a self-test cartridge, useful as the shelf's proof.

@@ -109,10 +109,12 @@ fault without counting boxes.
 
 Independent of rungs 4–6: a different card, whose faults cannot mask theirs.
 
-## 9. A boot menu in the module — built, host-tested end to end
+## ~~9. A boot menu in the module~~ — PASSED on hardware
 
 **Question: can the module carry a shelf of programs behind a menu?
-Answer in the emulator: yes, the whole chain.**
+Answer: yes — 2026-08-08, same day as rung 8.** Menu up at power-on,
+BASIC-G 3.0 and the test cartridge both booting from their keys, reset
+and power-cycle semantics as designed.
 
 `tools/make_multiload.py` builds it: page 0 a generated menu (keyboard
 matrix scan, names rendered from the font), every other page a cartridge —
@@ -130,9 +132,15 @@ contract measured on the bus clock — against a monitor reconstructed
 instruction-for-instruction from the disassembly, which is itself a test
 of the ABI reading. Details in docs/ROM-module.md.
 
-Still to run on hardware. Remaining v2 candidates, in rising ambition:
-programs larger than one page (chunked loading across page switches);
-`.ptp` tape-file conversion into shelf entries; more than 16 entries.
+Since the hardware pass, the shelf also reaches back a generation:
+`rmm2` entries boot PMD 85-2 modules through the -3 monitor's own
+`JMP FFF0h` compatibility switch — no firmware change, one menu action.
+Host-tested against the real monit3B end to end; not yet run on
+hardware. Remaining candidates, in rising ambition: programs larger
+than one page (chunked loading across page switches); `.ptp` tape-file
+conversion into shelf entries; composite pages (a BASIC plus the module
+software it loads, e.g. `wurmi`/`kli2`, which have no boot stub of their
+own); more than 16 entries.
 
 ## Parked
 

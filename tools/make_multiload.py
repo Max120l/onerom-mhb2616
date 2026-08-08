@@ -27,10 +27,19 @@ The manifest:
     {"name": "shelf",
      "entries": [
        {"type": "rmm",    "name": "BASIC-G 3.0", "file": "basic3.rmm"},
+       {"type": "rmm2",   "name": "BASIC 2A",    "file": "basic2A.rmm"},
        {"type": "binary", "name": "SOME GAME",   "file": "game.bin",
         "load": "0x2000", "exec": "0x2000"},
        {"type": "demo",   "name": "TEST CARD"}
      ]}
+
+An "rmm2" entry is a PMD 85-2 module (stub starts CDh).  Selecting one
+jumps the -3 monitor's documented switch at FFF0h: it relocates its own
+first 4 KB into RAM at 8000h as a monit2B-lineage compatibility monitor,
+which then boots the mapped page by the -2 convention.  Reset from a -2
+cartridge lands at the -3 monitor prompt (byte 0 is CDh, not the CCh the
+-3 wants); JUMP FFF0 there relaunches it, a power cycle returns to the
+menu.
 
 Constraints the tool enforces rather than documents: at most 16 entries
 (the menu's key row), payload clear of the hotspot region in every page,
@@ -227,13 +236,20 @@ def build_menu(entries: list) -> bytes:
         a.jz(f"sel_{i}")
     a.jmp("scan")
 
+    # D carries the generation: 0 boots the page with the -3's own module
+    # dance, 1 hands the whole job to JMP FFF0h -- the -3 monitor's
+    # documented switch into PMD 85-2 mode, which relocates its first 4 KB
+    # to RAM at 8000h as a monit2B and lets THAT monitor boot the page by
+    # the -2 convention (CALL 8C00h stub, CPI CDh).  Measured end to end
+    # in the emulator; see docs/ROM-module.md.
     for i, ent in enumerate(entries):
         a.label(f"sel_{i}")
+        a.mvi(D, 1 if ent.get("v2") else 0)
         a.mvi(A, ent["page"])
         a.jmp("boot")
 
-    # boot: A = page.  Touch the hotspot, sit out the board's rebuild, then
-    # replay the monitor's own module boot against the new page.
+    # boot: A = page, D = generation.  Touch the hotspot, sit out the
+    # board's rebuild, then boot the new page the way its machine expects.
     a.label("boot")
     a.lxi(RP_SP, REPLAY_SP)           # stack out of every cartridge's way
     a.adi(0xE0)                       # hotspot low byte; page <= 31, no carry
@@ -252,6 +268,9 @@ def build_menu(entries: list) -> bytes:
     a.mov(A, B)
     a.ora(C)
     a.jnz("dly")
+    a.mov(A, D)
+    a.ora(A)
+    a.jnz("boot_v2")
     # The monitor's E02D sequence, inlined: read the new page's first
     # fourteen bytes to C1B2 and run them if they announce themselves.
     a.call(EC00)
@@ -262,8 +281,11 @@ def build_menu(entries: list) -> bytes:
     # Not bootable.  Should be unreachable -- the tool refuses such entries
     # -- but a wrong page must not strand the machine: go home to the menu
     # by booting page 0 through the very same path.
+    a.mvi(D, 0)
     a.mvi(A, 0)
     a.jmp("boot")
+    a.label("boot_v2")
+    a.jmp(0xFFF0)
 
     emit_clear(a)
     emit_blit7(a)
@@ -332,14 +354,21 @@ def check_hotspot_clear(data: bytes, what: str) -> None:
                          f"payload")
 
 
-def page_from_rmm(data: bytes, name: str) -> bytes:
+def page_from_rmm(data: bytes, name: str, v2: bool = False) -> bytes:
     if len(data) > PAGE:
         raise SystemExit(f"error: {name} is {len(data)} bytes; the module "
                          f"window is {PAGE} and multi-page cartridges are "
                          f"not supported yet")
-    if data[0] != 0xCC:
-        raise SystemExit(f"error: {name} does not start with CCh, so the "
-                         f"monitor would never boot it")
+    want, mach = (0xCD, "PMD 85-2") if v2 else (0xCC, "PMD 85-3")
+    if data[0] != want:
+        hint = ""
+        if not v2 and data[0] == 0xCD:
+            hint = ' -- it starts with CDh, a PMD 85-2 module: use "rmm2"'
+        elif v2 and data[0] == 0xCC:
+            hint = ' -- it starts with CCh, a PMD 85-3 module: use "rmm"'
+        raise SystemExit(f"error: {name} does not start with "
+                         f"{want:02X}h, so the {mach} monitor would never "
+                         f"boot it{hint}")
     check_hotspot_clear(data, name)
     # Pad with 0x00, not 0xFF: a real module image can be over-read (the
     # stock BASIC stub reads 1026 bytes of a block that ends two short) and
@@ -378,9 +407,9 @@ def build_pages(entries: list, root: Path) -> tuple:
         name = ent["name"].upper()
         page_no = len(pages)
         kind = ent.get("type", "rmm")
-        if kind == "rmm":
+        if kind in ("rmm", "rmm2"):
             data = (root / ent["file"]).read_bytes()
-            pages.append(page_from_rmm(data, ent["file"]))
+            pages.append(page_from_rmm(data, ent["file"], v2=(kind == "rmm2")))
         elif kind == "binary":
             payload = (root / ent["file"]).read_bytes()
             load = int(ent["load"], 0)
@@ -391,7 +420,8 @@ def build_pages(entries: list, root: Path) -> tuple:
             pages.append(page_from_binary(payload, load, exec_, "demo"))
         else:
             raise SystemExit(f"error: unknown entry type {kind!r}")
-        menu_entries.append({"name": name, "page": page_no})
+        menu_entries.append({"name": name, "page": page_no,
+                             "v2": kind == "rmm2"})
     if len(pages) > MAX_PAGES:
         raise SystemExit(f"error: {len(pages)} pages; hotspot addressing "
                          f"reaches {MAX_PAGES}")

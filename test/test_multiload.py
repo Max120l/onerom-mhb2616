@@ -230,6 +230,69 @@ def test_unbootable_page_falls_back_to_the_menu():
     assert [p for _, p in bus.page_events] == [1, 0]
 
 
+MONIT3B = SCRATCH / "romzip/PMD85-rom-files/Monitor/PMD85-3/monit3B.rom"
+BASIC2A = SCRATCH / "romzip/PMD85-rom-files/RomModul/Basic2A/basic2A.rmm"
+
+
+def test_v2_entry_boots_through_fff0():
+    # A PMD 85-2 module on the shelf.  Selecting it must ride the -3
+    # monitor's own switch at FFF0h: relocate the compat monitor to 8000h,
+    # let it find the CD stub, and land in BASIC 2A at 0000h.  This test
+    # needs the real monit3B -- the fake monitor carries no FFF0 machinery
+    # -- so it runs the whole chain against the genuine article, which also
+    # re-proves the menu against the real E02D and EC00h.
+    import pytest
+    if not (MONIT3B.exists() and BASIC2A.exists()):
+        pytest.skip("reference ROMs not present")
+
+    b2a = BASIC2A.read_bytes()
+    pages, ents = ml.build_pages(
+        [{"type": "rmm", "name": "BASIC-G 3.0", "file": BASIC3.name},
+         {"type": "rmm2", "name": "BASIC 2A", "file": str(BASIC2A)}],
+        BASIC3.parent)
+    bus = Bus(MONIT3B.read_bytes(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    assert strip_on_screen(bus, ml.LN_ENTRY0 + ml.ENTRY_STEP, ml.TEXT_COL,
+                           ml.strip("2 BASIC 2A"))
+
+    bus.press(1, 2)                               # key "2"
+    # Through the switch: relocated monitor entry, its module check, the
+    # stub, and finally BASIC 2A's own entry at 0000h.
+    assert run_until_pc(cpu, 0x8000, 6_000_000), "FFF0 never landed at 8000"
+    assert run_until_pc(cpu, 0x802D, 6_000_000), "-2 module check not reached"
+    assert run_until_pc(cpu, 0x0000, 6_000_000), "BASIC 2A never entered"
+    # The -2 monitor went AllRAM on the way -- its relocated trampoline.
+    assert not bus.rom_visible
+    # The payload the -2 stub names: 9204 bytes from module 12 to 0000.
+    assert bytes(bus.ram[0:9204]) == b2a[12:12 + 9204]
+    # One page switch, delay honoured -- same contract as a -3 boot.
+    assert [p for _, p in bus.page_events] == [ents[1]["page"]]
+    touch = bus.page_events[0][0]
+    next_read = next(c for c, _ in bus.mod_reads if c > touch)
+    assert next_read - touch >= DELAY_MIN_CLOCKS
+
+
+def test_v2_reset_lands_at_the_v3_prompt():
+    # Reset with a -2 page mapped: the -3 monitor reads CDh, refuses it,
+    # and must fall through to its prompt rather than crash or boot.  The
+    # fake monitor HLTs where the real one would prompt, which makes the
+    # outcome assertable.
+    pages, ents = ml.build_pages(
+        [{"type": "rmm", "name": "BASIC-G 3.0", "file": BASIC3.name},
+         {"type": "rmm2", "name": "BASIC 2A", "file": str(BASIC2A)}],
+        BASIC3.parent)
+    bus = Bus(fake_monitor(), pages=pages)
+    bus.mod_page = ents[1]["page"]
+    cpu = boot(bus)
+    for _ in range(100_000):
+        if cpu.halted:
+            break
+        cpu.step()
+    assert cpu.halted, "the -3 monitor should have refused the CD stub"
+    assert bus.ram[ml.STUB_RAM] == 0xCD
+
+
 def test_pack_tool_refuses_the_refusable(tmp_path):
     import pytest
     # An rmm that cannot boot.
@@ -237,6 +300,17 @@ def test_pack_tool_refuses_the_refusable(tmp_path):
     bad.write_bytes(bytes([0x00]) * 2048)
     with pytest.raises(SystemExit, match="CCh"):
         ml.build_pages([{"type": "rmm", "name": "X", "file": "bad.rmm"}],
+                       tmp_path)
+    # A generation mix-up gets pointed at the right type, both ways.
+    v2 = tmp_path / "v2.rmm"
+    v2.write_bytes(bytes([0xCD]) + bytes(2047))
+    with pytest.raises(SystemExit, match="rmm2"):
+        ml.build_pages([{"type": "rmm", "name": "X", "file": "v2.rmm"}],
+                       tmp_path)
+    v3 = tmp_path / "v3.rmm"
+    v3.write_bytes(bytes([0xCC]) + bytes(2047))
+    with pytest.raises(SystemExit, match='use "rmm"'):
+        ml.build_pages([{"type": "rmm2", "name": "X", "file": "v3.rmm"}],
                        tmp_path)
     # Payload in the hotspot region.
     hot = tmp_path / "hot.rmm"
