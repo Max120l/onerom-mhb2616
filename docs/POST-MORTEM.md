@@ -113,6 +113,10 @@ blip on a green long colour is the intermittent caught in the act.
 
 Each of these has a fuller writeup in BOARD-NOTES.md or PMD85-3.md:
 
+- **Start at the basics: Vcc, clock, reset** — every beacon-based
+  diagnostic proves things downstream of a fetching CPU, and those three
+  are what fetching runs on. The dead 8224 took ten seconds with a scope;
+  no served image could ever have named it.
 - **An edge is not an event** — a held select is one edge and many reads.
 - **A count needs an out-of-band marker**, not a longer gap.
 - **Copying a sequence out of working firmware copies its preconditions
