@@ -109,34 +109,30 @@ fault without counting boxes.
 
 Independent of rungs 4–6: a different card, whose faults cannot mask theirs.
 
-## 9. A boot menu in the module — *after 8*
+## 9. A boot menu in the module — built, host-tested end to end
 
-The monitor hands a ROM module the whole machine, and does it in fourteen
-bytes: at `E02D` it copies the module's first bytes to `C1B2` and jumps to
-them if the first is `CCh`, with its own block-read routine at `EC00h`
-available to pull in as much more as the stub asks for. BASIC's stub spends
-twelve of them loading 1 KB to `B800h` and jumping. Disassembly, and why
-the count is fourteen rather than the thirteen the field says, in
-docs/ROM-module.md.
+**Question: can the module carry a shelf of programs behind a menu?
+Answer in the emulator: yes, the whole chain.**
 
-So a menu is a stub, a first stage, and a table of programs. The binding
-constraint is the window, not the flash:
+`tools/make_multiload.py` builds it: page 0 a generated menu (keyboard
+matrix scan, names rendered from the font), every other page a cartridge —
+`basic3.rmm` verbatim, or a raw binary wrapped in a boot stub of its own.
+Selection touches a hotspot (a live read of module `0x3FE0+n` names page
+*n*), sits out the board's rebuild, and then replays the monitor's own
+`E02D` boot against the new page — so BASIC boots through its stock stub,
+byte-identical to a cartridge swap. Reset relaunches the mapped cartridge,
+exactly as a real module would; power cycle returns to the menu.
 
-- **The window is 16 KB.** A0–A10 from the socket and A11–A13 from the
-  7442 is all this card can express — A14 is the read strobe and A15 parks
-  the decoder. Everything the machine can see at one time lives in 16 KB.
-- **Flash is not the limit.** Anything beyond 16 KB has to be paged into
-  that window: the HOTSPOT idea of rung 7 applied to a different card, with
-  the loader reading reserved module addresses to ask for slot *n* and then
-  reading the program out of the window normally.
-- **The loader runs from RAM**, because the monitor copies it there before
-  executing it. So it can page the window under its own feet without losing
-  itself — which a monitor-socket hotspot image can never safely do. This
-  card is a friendlier place for banked software than the sockets are.
+The emulator run covers: the menu loading and rendering, a keypress
+booting BASIC through its own two-stage dance, a raw-binary cartridge
+booting, reset semantics, the unbootable-page fallback, and the delay
+contract measured on the bus clock — against a monitor reconstructed
+instruction-for-instruction from the disassembly, which is itself a test
+of the ABI reading. Details in docs/ROM-module.md.
 
-Gates in order: rung 8 first, since a menu on unproven serving is two
-unknowns at once; then a stub that boots one thing other than BASIC; then
-paging. Each answers a question the next one assumes.
+Still to run on hardware. Remaining v2 candidates, in rising ambition:
+programs larger than one page (chunked loading across page switches);
+`.ptp` tape-file conversion into shelf entries; more than 16 entries.
 
 ## Parked
 

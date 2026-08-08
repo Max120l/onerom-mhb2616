@@ -128,6 +128,7 @@ from", chosen at build time:
 | `FULL8K` | 1 | all four | One flying lead: the other pair's /CS (pin 20 of either empty socket) to the X1 pad. A12 = which select is active, A11 = PR. All three others out. |
 | `HOTSPOT` | 0 | one chip, four images | Reads of four magic addresses switch images — for software written to touch them. **The stock monitor never will**; this mode is for custom/diagnostic ROMs. |
 | `MODULE` | 3 | all five, on a different card | Not a monitor socket: the BASIC ROM module, whose 16 KB window is eight slots behind its own 7442. Three leads bring that decoder's address inputs to the board, one of them onto a freed pin 21; a fourth lead is optional. See [docs/ROM-module.md](docs/ROM-module.md). |
+| `MODULE` + `MULTILOAD` | 3 | all five, plus a boot menu | The same wiring serving up to 32 pages of 16 KB: page 0 a generated menu, every other page a cartridge (BASIC, or raw programs wrapped in boot stubs), switched by hotspot reads. `tools/make_multiload.py`. See [docs/ROM-module.md](docs/ROM-module.md). |
 
 `STATIC` is the default because it is the only mode that is safe no matter
 what else is still in its socket's neighbourhood — it drives exactly when

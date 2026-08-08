@@ -343,6 +343,76 @@ present with nothing driving this address. Do not read `0000` as a fault:
 on this card it is the correct signature of a bank the board is right not
 to answer for.
 
+## Multiload: a boot menu and a shelf of cartridges
+
+`MHB_MODULE_MULTILOAD=ON`, image from `tools/make_multiload.py`.
+**Host-tested end to end in the emulator; not yet run on hardware.**
+
+The boot contract above makes the module the machine's boot device, and
+multiload uses it twice. The board's flash holds up to 32 *pages* of
+16 KB. Page 0 is a menu: its stub loads a small program to `B000h` that
+draws the shelf and scans the keyboard matrix directly (column out on
+`F4h`, rows in on `F5h`, active low). Every other page is a cartridge —
+either a verbatim module image booted exactly as the machine would boot
+the real module, or a raw program wrapped in a fourteen-byte stub of its
+own.
+
+**The hotspot protocol.** A live read (`/OE` low) of module address
+`0x3FE0 + n` switches the board to page *n*. The window's top 32 bytes
+are therefore control registers on *every* page — they must be, since a
+switch must be reachable from wherever the machine currently is — and
+the pack tool refuses payload there. The serve loop flags those entries
+in the LUT and core 0 rebuilds the table from the named page; the
+machine's side of the contract is to touch the hotspot and then leave
+the module alone for **300 ms** (the menu's delay loop; the board's
+worst case is ~70 ms). The emulator holds the menu to that contract by
+measuring the gap on the bus clock, not by inspecting the delay loop.
+
+**Selection is a replay of the machine's own boot.** The menu touches
+the hotspot, waits, then inlines the monitor's `E02D` sequence — read
+fourteen bytes to `C1B2`, `CPI CCh`, jump in. BASIC therefore boots
+through its own stock stub, byte-identical to a real cartridge swap,
+second-stage quirks included (the stock stub reads 1026 bytes of a
+block that ends two short; the pack tool pads rmm pages with `0x00` so
+even the over-read matches this machine's measured undriven bus).
+
+**Reset semantics fall out rather than being designed.** The monitor
+boots whatever page is mapped, so reset relaunches the current
+cartridge — exactly what a really-plugged module does — and a power
+cycle returns the board to page 0, the menu. (The module is powered
+from the machine, so a machine power cycle is a board reboot.)
+
+**The stack during boot replay** sits at `E000h`, pushing into the
+invisible margin of VRAM line 127 — the same margin trick the monitor
+itself uses for its variables — so a cartridge may load anywhere in
+`0000–BFFF` without the loader's stack in its way.
+
+Manifest, and what the tool enforces:
+
+```json
+{"name": "shelf",
+ "entries": [
+   {"type": "rmm",    "name": "BASIC-G 3.0", "file": "basic3.rmm"},
+   {"type": "binary", "name": "SOME GAME",   "file": "game.bin",
+    "load": "0x2000", "exec": "0x2000"},
+   {"type": "demo",   "name": "TEST CARD"}
+ ]}
+```
+
+- at most 16 entries (keys `1–9`, `0`, `A–F`), 32 pages;
+- an rmm must start with `CCh` — of the RM-TEAM archive's module images
+  only `basic3.rmm` does; the others carry the PMD 85-1/2 convention
+  (`CALL 8C00h`) and cannot boot a -3;
+- a binary must fit one page (~16.2 KB) and load inside `0000–BFFF`;
+  bigger or multi-segment programs are future work;
+- `demo` generates a self-test cartridge, useful as the shelf's proof.
+
+One caution: a multiload set fills every bank of every page, so the
+detached-harness safety of a partial image (bank 7 absent, broken wire
+means silence) does not apply. The wiring is proven before multiload
+goes in — the scanner pass — and the park lead restores the property if
+it is ever wanted.
+
 ### Building it
 
 ```

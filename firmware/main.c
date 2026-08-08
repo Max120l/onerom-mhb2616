@@ -106,6 +106,24 @@ static volatile uint32_t g_served;
 #error "MHB_DIAG does not apply to MHB_BANK_SOURCE=MODULE"
 #endif
 
+#ifndef MHB_MULTILOAD
+#define MHB_MULTILOAD 0
+#endif
+#if MHB_MULTILOAD && !MHB_BANK_MODULE
+#error "MHB_MULTILOAD is a MODULE-mode feature"
+#endif
+
+#if MHB_MULTILOAD
+// The hotspot index core 1 last saw, or the sentinel.  Written every serve
+// iteration the address is held -- idempotent -- and consumed by core 0,
+// which rebuilds the table from the named page.  The machine's side of the
+// contract (touch, then 300 ms of silence) is what makes the coarse
+// polling here sufficient.
+#define MHB_HS_NONE 0xFFFFFFFFu
+static volatile uint32_t g_hs_seen = MHB_HS_NONE;
+static unsigned g_cur_page;
+#endif
+
 #if MHB_DIAG >= 3
 // How many beacons the frame blinks.  Must cover every beacon the served
 // ROM can emit; see tools/make_ramtest.py, which currently uses 0..23.
@@ -298,8 +316,15 @@ static void build_tables(void) {
     // No socket-side configuration at all: the bank arrives on the leads and
     // the gating is the module's own strobe.  Nothing here is per-socket,
     // which is the point -- one board answers for the whole card.
+#if MHB_MULTILOAD
+    // Power-on page is 0, the menu.  Every page is fully populated (the
+    // pack tool pads), so present is always 0xFF here.
+    mhb_build_lut16_module(g_lut16, mhb_pages[0], 0xFF, MHB_MODULE_PARK_LEAD);
+    mhb_mark_module_hotspots(g_lut16, MHB_MODULE_PARK_LEAD);
+#else
     mhb_build_lut16_module(g_lut16, mhb_banks, mhb_bank_present,
                            MHB_MODULE_PARK_LEAD);
+#endif
 #else
     mhb_lut16_cfg_t cfg = {
         .socket_pair = MHB_SOCKET_PAIR,
@@ -379,6 +404,15 @@ static void __not_in_flash_func(serve_forever)(void) {
                 driving = true;
                 g_served++;
             }
+#if MHB_MULTILOAD
+            // A held hotspot address stores the same index every iteration;
+            // core 0 consumes it and rebuilds.  The read itself is served
+            // normally -- the byte under a hotspot is padding, and the
+            // machine's loader does not look at it.
+            if (v & MHB_LUT16_HOTSPOT) {
+                g_hs_seen = idx;
+            }
+#endif
             // Diagnostics are recorded on every iteration we are driving,
             // NOT only on the not-driving-to-driving edge.
             //
@@ -757,6 +791,36 @@ int main(void) {
     }
 #endif // MHB_DIAG == 1
 
+#if MHB_MULTILOAD
+    // Core 0's real job in a multiload build: consume hotspot sightings and
+    // rebuild the table from the named page.  Core 1 keeps serving the old
+    // page while this runs -- the machine promised 300 ms of silence after
+    // a touch, and detection (5 ms poll) plus rebuild (~65 ms) fits inside
+    // it several times over.
+#define MHB_POLL_MS 5
+#else
+#define MHB_POLL_MS 100
+#endif
+
+#if MHB_MULTILOAD
+    #define MULTILOAD_POLL() do { \
+        uint32_t seen = g_hs_seen; \
+        if (seen != MHB_HS_NONE) { \
+            g_hs_seen = MHB_HS_NONE; \
+            unsigned page = mhb_addr_from_index((uint16_t)seen) \
+                            & (MHB_MODULE_MAX_PAGES - 1u); \
+            if (page < mhb_page_count && page != g_cur_page) { \
+                g_cur_page = page; \
+                mhb_build_lut16_module(g_lut16, mhb_pages[page], 0xFF, \
+                                       MHB_MODULE_PARK_LEAD); \
+                mhb_mark_module_hotspots(g_lut16, MHB_MODULE_PARK_LEAD); \
+            } \
+        } \
+    } while (0)
+#else
+    #define MULTILOAD_POLL() do { } while (0)
+#endif
+
     // Core 0 turns the served-cycle count into something visible.  Installed
     // in a machine that will not boot, the useful question is whether the
     // board is being selected at all.
@@ -769,10 +833,11 @@ int main(void) {
     sleep_ms(250);
     uint32_t last_served = 0;
     while (true) {
+        MULTILOAD_POLL();
         uint32_t served = g_served;
         neo_put(served != last_served ? NEO_SERVING : NEO_IDLE);
         last_served = served;
-        sleep_ms(100);
+        sleep_ms(MHB_POLL_MS);
     }
 #else
     //   dark          nothing is selecting us -- no strobes, or no power
@@ -781,11 +846,12 @@ int main(void) {
     //                     read us and gave up somewhere else
     uint32_t last_served = 0;
     while (true) {
+        MULTILOAD_POLL();
         uint32_t served = g_served;
         gpio_put(GPIO_STATUS_LED,
                  served != last_served ? STATUS_LED_ON : STATUS_LED_OFF);
         last_served = served;
-        sleep_ms(100);
+        sleep_ms(MHB_POLL_MS);
     }
 #endif
 }

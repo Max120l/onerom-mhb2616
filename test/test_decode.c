@@ -411,6 +411,50 @@ static void test_module_full_window(void) {
           "if this ever fails the safety note in ROM-module.md is stale");
 }
 
+static void test_module_hotspot_marks(void) {
+    // The mark pass flags exactly the entries the machine can trigger: a
+    // live read of bank 7 at 0x7E0+n.  Everything else stays clean, the
+    // flag survives on top of a built table without disturbing data or
+    // drive, and the two park wirings differ exactly as documented.
+    for (unsigned park = 0; park < 2; park++) {
+        mhb_build_lut16_module(lut16, mod_banks, 0xFF, park != 0);
+        mhb_mark_module_hotspots(lut16, park != 0);
+
+        unsigned flagged = 0;
+        for (uint32_t idx = 0; idx < MHB_LUT_SIZE; idx++) {
+            if (lut16[idx] & MHB_LUT16_HOTSPOT) flagged++;
+        }
+        CHECK(flagged == (park ? 32u : 64u),
+              "hotspots: %u entries flagged, expected %u (park=%u)",
+              flagged, park ? 32u : 64u, park);
+
+        for (unsigned n = 0; n < MHB_MODULE_MAX_PAGES; n++) {
+            unsigned addr = MHB_MODULE_HOTSPOT_BASE + n;
+            uint16_t e = lut16[module_idx(addr, 7, true, false)];
+            CHECK(e & MHB_LUT16_HOTSPOT,
+                  "hotspot %u not flagged on a live read", n);
+            // The flag rides along; the entry still serves its byte.
+            CHECK(e & MHB_LUT16_DRIVE, "hotspot %u lost its drive bit", n);
+            CHECK((e & 0xFF) == mhb_scramble_data(fill(7, addr)),
+                  "hotspot %u disturbed its data byte", n);
+            // /OE high can never trigger, in either wiring.
+            CHECK(!(lut16[module_idx(addr, 7, false, false)]
+                    & MHB_LUT16_HOTSPOT),
+                  "hotspot %u flagged with /OE high", n);
+            // The parked state triggers exactly when there is no park lead.
+            CHECK(!!(lut16[module_idx(addr, 7, true, true)]
+                     & MHB_LUT16_HOTSPOT) == !park,
+                  "hotspot %u park-state flag wrong (park=%u)", n, park);
+        }
+        // The neighbouring payload byte just below the region is clean.
+        CHECK(!(lut16[module_idx(MHB_MODULE_HOTSPOT_BASE - 1, 7, true, false)]
+                & MHB_LUT16_HOTSPOT), "flag leaked below the hotspot region");
+        // Same in-bank address, different bank: clean.
+        CHECK(!(lut16[module_idx(MHB_MODULE_HOTSPOT_BASE, 6, true, false)]
+                & MHB_LUT16_HOTSPOT), "flag leaked into bank 6");
+    }
+}
+
 int main(void) {
     for (unsigned b = 0; b < MHB_BANKS; b++) {
         for (unsigned a = 0; a < MHB_BANK_SIZE; a++) {
@@ -437,6 +481,7 @@ int main(void) {
     test_module_without_park_lead();
     test_module_detached_harness();
     test_module_full_window();
+    test_module_hotspot_marks();
 
     if (g_failures) {
         printf("%u failure(s)\n", g_failures);

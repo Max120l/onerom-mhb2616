@@ -178,6 +178,32 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
 #define MHB_LUT16_MOD_BANK_SHIFT  9
 #define MHB_LUT16_MOD_BANK_MASK   (7u << MHB_LUT16_MOD_BANK_SHIFT)
 
+// ---------------------------------------------------------------------------
+// Multiload: page switching over the module window
+// ---------------------------------------------------------------------------
+
+// A multiload image is up to 32 pages of 16 KB, and the machine names the
+// one it wants by reading a hotspot: a live read (/OE low) of bank 7,
+// in-bank address 0x7E0 + n, selects page n.  The window's own top 32
+// bytes are therefore control registers, never payload -- the pack tool
+// keeps them free in every page, because the hotspots must be reachable
+// from every page or a switch could strand the machine.
+//
+// The serve loop answers a hotspot read like any other (the byte under it
+// is padding) and records the index; core 0 rebuilds the table from the
+// named page.  The machine-side contract is in docs/ROM-module.md: touch
+// the hotspot, then leave the module alone for 300 ms before trusting a
+// read, which covers detection plus rebuild several times over.
+#define MHB_LUT16_HOTSPOT         0x1000u
+#define MHB_MODULE_HOTSPOT_BASE   0x7E0u    // in-bank, bank 7
+#define MHB_MODULE_MAX_PAGES      32u
+
+// Set the hotspot flag on the entries the machine can trigger.  Run after
+// every (re)build -- the builder writes whole entries and clears it.  With
+// the park lead only park-low reads can trigger; without it pin 18 is a
+// /CSn swinging freely, so both its states carry the flag.
+void mhb_mark_module_hotspots(uint16_t *lut, bool use_park);
+
 // Fill the table for MODULE mode.  `banks` must hold MHB_MODULE_BANKS banks;
 // `present` marks which of them carry image data.  Absent banks are never
 // driven, so the machine reads them as the floating bus does -- 0xFF, which

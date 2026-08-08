@@ -43,7 +43,19 @@ SYSTEM_CWR = 0xF7                # ...and its control register
 # byte to port B (89h) and high byte to port C (8Ah), then reads the data
 # byte from port A (88h).  A15 set, or no module, reads FFh.  Modelled on
 # GPMD85Emulator src/RomModule.cpp.
+#
+# The decode is a MASK, port & 8Ch == 88h, so the chip also answers at
+# F8h-FBh -- and that alias is the one the monitor actually uses.  The
+# model matching only the canonical addresses cost a debugging session:
+# every EC00h transfer silently read FFh.  Docs/ROM-module.md warned about
+# exactly this and the emulator had not read it.
 MODULE_A, MODULE_B, MODULE_C, MODULE_CWR = 0x88, 0x89, 0x8A, 0x8B
+MODULE_MASK, MODULE_SEL = 0x8C, 0x88
+
+
+def module_reg(port: int):
+    """The module register a port hits, or None: 0=A, 1=B, 2=C, 3=CWR."""
+    return (port & 3) if (port & MODULE_MASK) == MODULE_SEL else None
 
 
 class Bus:
@@ -56,7 +68,8 @@ class Bus:
                  sticky_map: bool = False,
                  map_clear_ports=None,
                  map_clear_on_in=(),
-                 module: bytes | None = None):
+                 module: bytes | None = None,
+                 pages: list | None = None):
         assert len(rom) == 0x2000
         self.rom = rom
         self.ram = bytearray(0x10000)
@@ -104,6 +117,27 @@ class Bus:
         self.clock = 0
         self.rom_reads = []
 
+        # A One ROM board in MODULE multiload service: a list of 16 KB
+        # pages behind the same ports, page-switched by presenting a
+        # hotspot address (0x3FE0+n, strobe live) on the latches.  The
+        # board's own rebuild takes real time, so every switch is logged
+        # with the clock and every module data read is too -- the tests
+        # hold the machine to its side of the contract (touch, then
+        # silence) by measuring the gap, not by trusting the code's delay
+        # loop to look right.
+        self.pages = pages
+        self.mod_page = 0
+        self.page_events = []     # (clock, page) at each hotspot sighting
+        self.mod_reads = []       # (clock, addr) at each module data read
+
+        # The keyboard matrix behind the system 8255: OUT F4h selects a
+        # column in the low nibble, IN F5h returns rows in bits 0-4 active
+        # low, shift and stop in bits 5-6 likewise.  Modelled on
+        # GPMD85Emulator SystemPIO::ReadKeyboardB.  press()/release_all()
+        # poke the matrix from a test.
+        self.key_columns = [0] * 16
+        self.sys_a = 0            # system port A latch (column select)
+
     def read(self, a: int) -> int:
         a &= 0xFFFF
         self.clock += 1
@@ -132,31 +166,69 @@ class Bus:
         self.ram[a] = v & 0xFF
         self.written_at[a] = self.clock
 
+    def press(self, col: int, rowmask: int) -> None:
+        self.key_columns[col & 0x0F] |= rowmask & 0x1F
+
+    def release_all(self) -> None:
+        self.key_columns = [0] * 16
+
+    def _module_hotspot_check(self) -> None:
+        """A hotspot address on the latches, strobe live, names a page."""
+        if self.pages is None:
+            return
+        addr = (self.mod_c << 8) | self.mod_b
+        if (addr & 0xFFE0) == 0x3FE0:          # bits 14/15 clear: live read
+            page = addr & 0x1F
+            self.page_events.append((self.clock, page))
+            if page < len(self.pages):
+                self.mod_page = page
+
     def inp(self, port: int) -> int:
         self.clock += 1
         if port in self.map_clear_on_in:
             self.startup_map = False
-        if port == MODULE_A:
+        reg = module_reg(port)
+        if reg == 0:
             addr = (self.mod_c << 8) | self.mod_b
+            if self.pages is not None:
+                if addr & 0x8000:
+                    return 0xFF
+                self.mod_reads.append((self.clock, addr))
+                page = self.pages[self.mod_page]
+                a = addr & 0x3FFF
+                return page[a] if a < len(page) else 0xFF
             if self.module is None or (addr & 0x8000):
                 return 0xFF
             if addr >= len(self.module):
                 return 0xFF
             return self.module[addr]
+        if reg in (1, 2):
+            # Mode-0 output ports read back their latch.  EC00h's address
+            # walk depends on this: it increments the address through the
+            # ports themselves, IN / INR / OUT.
+            return self.mod_b if reg == 1 else self.mod_c
+        if port == 0xF5:
+            # Rows of the selected column, active low, shift/stop unpressed.
+            return (~self.key_columns[self.sys_a & 0x0F] & 0x1F) | 0x60
         return 0xFF
 
     def out(self, port: int, v: int) -> None:
         self.clock += 1
-        if port == MODULE_B:
+        reg = module_reg(port)
+        if reg == 1:
             self.mod_b = v & 0xFF
+            self._module_hotspot_check()
             return
-        if port == MODULE_C:
+        if reg == 2:
             self.mod_c = v & 0xFF
+            self._module_hotspot_check()
             return
-        if port == MODULE_CWR:
+        if reg == 3:
             if v & 0x80:
                 self.mod_b = self.mod_c = 0    # mode set clears the latches
             return
+        if port == 0xF4:
+            self.sys_a = v & 0xFF              # column select for IN F5h
         if self.sticky_map:
             return
         if port in self.map_clear_ports:
@@ -437,6 +509,16 @@ class CPU:
             if op == 0xEB:
                 self.r["H"], self.r["D"] = self.r["D"], self.r["H"]
                 self.r["L"], self.r["E"] = self.r["E"], self.r["L"]
+                return
+            if op == 0xE3:                       # XTHL -- the monitor's
+                lo = self.bus.read(self.sp)      # EC00h block-read routine
+                hi = self.bus.read(self.sp + 1)  # leans on it twice a call
+                self.bus.write(self.sp, self.r["L"])
+                self.bus.write(self.sp + 1, self.r["H"])
+                self.r["L"], self.r["H"] = lo, hi
+                return
+            if op == 0xF9:                       # SPHL
+                self.sp = self.hl()
                 return
             if op in (0xF3, 0xFB):
                 return

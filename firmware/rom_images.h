@@ -28,4 +28,13 @@ extern const uint8_t mhb_bank_present;
 extern const uint8_t mhb_banks[MHB_BANKS][MHB_BANK_SIZE];
 extern const char   *mhb_image_name;
 
+#if MHB_MULTILOAD
+// A multiload image: up to 32 pages, each the full window, page-switched by
+// hotspot reads (see decode.h).  Page 0 is the menu and is what the board
+// serves from power-on.  Every page carries all eight banks -- the pack
+// tool pads -- so bank_present plays no per-page role here.
+extern const uint8_t  mhb_pages[][MHB_BANKS][MHB_BANK_SIZE];
+extern const unsigned mhb_page_count;
+#endif
+
 #endif // ROM_IMAGES_H

@@ -94,6 +94,16 @@ target_compile_definitions(mhb2616 PRIVATE MHB_SOCKET_BANK=${MHB_SOCKET_BANK})
 # board through a 2716 programmer, which parks pin 18 at one level.  Never in
 # a machine -- the pair-mate chip answers the other PR state, and this would
 # fight it.
+# MODULE: serve a multiload image -- up to 32 pages of 16 KB, page-switched
+# by hotspot reads of the window's top 32 bytes, page 0 a boot menu.  The
+# image comes from tools/make_multiload.py, which also generates the menu.
+option(MHB_MODULE_MULTILOAD "MODULE: multi-page multiload image" OFF)
+target_compile_definitions(mhb2616 PRIVATE
+    MHB_MULTILOAD=$<BOOL:${MHB_MODULE_MULTILOAD}>)
+if(MHB_MODULE_MULTILOAD AND NOT MHB_BANK_SOURCE STREQUAL "MODULE")
+    message(FATAL_ERROR "MHB_MODULE_MULTILOAD requires MHB_BANK_SOURCE=MODULE")
+endif()
+
 # MODULE: has socket pin 18 been rewired from its /CSn to the 8255's PC7?
 # Off by default, because the three address leads work without any board or
 # socket modification and the monitor's park raises the read strobe at the

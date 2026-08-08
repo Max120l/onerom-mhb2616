@@ -111,6 +111,20 @@ void mhb_build_lut16_module(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
     }
 }
 
+void mhb_mark_module_hotspots(uint16_t *lut, bool use_park) {
+    for (unsigned n = 0; n < MHB_MODULE_MAX_PAGES; n++) {
+        // Bank 7, /OE low (nOE bit clear), address 0x7E0+n.  64 entries at
+        // most: this must re-run after every page rebuild, so it is a fixed
+        // list of writes rather than a 64 K scan.
+        uint16_t idx = mhb_index_of(MHB_MODULE_HOTSPOT_BASE + n)
+                     | MHB_IDX_MOD_A11 | MHB_IDX_MOD_A12 | MHB_IDX_MOD_A13;
+        lut[idx] |= MHB_LUT16_HOTSPOT;
+        if (!use_park) {
+            lut[idx | MHB_IDX_MOD_PARK] |= MHB_LUT16_HOTSPOT;
+        }
+    }
+}
+
 void mhb_build_lut8(uint8_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
                     uint8_t present, unsigned bank) {
     bank &= 3;
