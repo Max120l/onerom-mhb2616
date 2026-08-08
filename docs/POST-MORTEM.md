@@ -2,12 +2,23 @@
 
 2026-08-08. The machine boots monit3B from a One ROM Fire 24 rev F in
 socket DS4 (FULL8K, one flying lead to the other pair's /CS). This file
-records what was actually wrong, because three separate faults were true
+records what was actually wrong, because four separate faults were true
 at once and each one masked the next — and because most of the week's
 "machine faults" were instrument faults, in roughly equal parts mine and
 history's.
 
-## The three faults
+## The four faults
+
+### 0. The 8224 clock generator was dead
+
+Fixed before this project's story even starts, and easy to forget for
+exactly that reason: with no clock there is no machine at all, and every
+other fault on this list was invisible behind it. The working 8224 in the
+machine now is borrowed from another PMD 85. It belongs on the list both
+for completeness and as a warning to whoever reads this while fixing a
+different machine — the fault you fixed first still counts, and a
+replacement part on loan is a thing the machine's records should know
+about.
 
 ### 1. The original ROMs are dead
 
@@ -56,9 +67,12 @@ reconnected. A cracked joint, the other failure mode, merely disconnects
 the input and *unloads* the bus. Neither branch survives the reconnect
 test.
 
-The ~2.65 Vp-p "clamp" once measured on D6/D7 stays on the books as
-unattributed: possibly a marginal input that recovered, possibly an
-artifact of probing a halted machine's floating bus.
+The ~2.65 Vp-p "clamp" once measured on D6/D7 is very likely the same
+bad socket seen from the other side: a corroded contact is a series
+resistance, and against the bus loading it forms a divider — a reduced
+swing downstream of it is what a bad contact *looks like* on a scope.
+The measurement was pointing at the right fault all along; the blame
+went to the nearest IC instead.
 
 If the fault ever recurs, the order of operations is: reseat and re-clean
 the sockets first, and only then reach for the soldering iron.
