@@ -135,8 +135,9 @@ of the ABI reading. Details in docs/ROM-module.md.
 Since the hardware pass, the shelf also reaches back a generation:
 `rmm2` entries boot PMD 85-2 modules through the -3 monitor's own
 `JMP FFF0h` compatibility switch — no firmware change, one menu action.
-Host-tested against the real monit3B end to end; not yet run on
-hardware. Remaining candidates, in rising ambition: programs larger
+Confirmed on hardware the same day: BASIC 2A boots from its key,
+the machine relocating itself into a PMD 85-2 mid-menu.  Remaining
+candidates, in rising ambition: programs larger
 than one page (chunked loading across page switches); `.ptp` tape-file
 conversion into shelf entries; composite pages (a BASIC plus the module
 software it loads, e.g. `wurmi`/`kli2`, which have no boot stub of their

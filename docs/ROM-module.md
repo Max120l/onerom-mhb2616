@@ -346,7 +346,10 @@ to answer for.
 ## Multiload: a boot menu and a shelf of cartridges
 
 `MHB_MODULE_MULTILOAD=ON`, image from `tools/make_multiload.py`.
-**Host-tested end to end in the emulator; not yet run on hardware.**
+**PASSED on hardware, 2026-08-08** -- menu at power-on, BASIC-G 3.0
+and the test cartridge booting from their keys, reset and power-cycle
+semantics as designed; the `rmm2` path confirmed the same day, BASIC
+2A booting through the machine's own FFF0h switch.
 
 The boot contract above makes the module the machine's boot device, and
 multiload uses it twice. The board's flash holds up to 32 *pages* of
