@@ -38,6 +38,13 @@ PARITY = [bin(i).count("1") % 2 == 0 for i in range(256)]
 SYSTEM_PIO = range(0xF4, 0xF8)   # the 8255 whose PC4 decides where ROM is
 SYSTEM_CWR = 0xF7                # ...and its control register
 
+# The ROM module (ROM PACK) is not memory-mapped at all: it hangs behind
+# its own 8255 at ports 88-8B.  The CPU writes the target address low
+# byte to port B (89h) and high byte to port C (8Ah), then reads the data
+# byte from port A (88h).  A15 set, or no module, reads FFh.  Modelled on
+# GPMD85Emulator src/RomModule.cpp.
+MODULE_A, MODULE_B, MODULE_C, MODULE_CWR = 0x88, 0x89, 0x8A, 0x8B
+
 
 class Bus:
     """PMD 85-3 memory behaviour, with optional injected RAM faults."""
@@ -48,7 +55,8 @@ class Bus:
                  rom_stuck_range: tuple | None = None,
                  sticky_map: bool = False,
                  map_clear_ports=None,
-                 map_clear_on_in=()):
+                 map_clear_on_in=(),
+                 module: bytes | None = None):
         assert len(rom) == 0x2000
         self.rom = rom
         self.ram = bytearray(0x10000)
@@ -88,6 +96,10 @@ class Bus:
         self.map_clear_ports = (SYSTEM_PIO if map_clear_ports is None
                                 else map_clear_ports)
         self.map_clear_on_in = map_clear_on_in
+        # The plugged ROM PACK, up to 32 KB, or None for an empty slot.
+        self.module = module
+        self.mod_b = 0            # port B latch: module address, low byte
+        self.mod_c = 0            # port C latch: module address, high byte
         self.written_at = {}
         self.clock = 0
         self.rom_reads = []
@@ -124,10 +136,27 @@ class Bus:
         self.clock += 1
         if port in self.map_clear_on_in:
             self.startup_map = False
+        if port == MODULE_A:
+            addr = (self.mod_c << 8) | self.mod_b
+            if self.module is None or (addr & 0x8000):
+                return 0xFF
+            if addr >= len(self.module):
+                return 0xFF
+            return self.module[addr]
         return 0xFF
 
     def out(self, port: int, v: int) -> None:
         self.clock += 1
+        if port == MODULE_B:
+            self.mod_b = v & 0xFF
+            return
+        if port == MODULE_C:
+            self.mod_c = v & 0xFF
+            return
+        if port == MODULE_CWR:
+            if v & 0x80:
+                self.mod_b = self.mod_c = 0    # mode set clears the latches
+            return
         if self.sticky_map:
             return
         if port in self.map_clear_ports:

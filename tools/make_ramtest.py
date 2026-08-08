@@ -112,6 +112,7 @@ class Asm:
     def out(self, p): self.db(0xD3, p)
     def inp(self, p): self.db(0xDB, p)
     def adi(self, v): self.db(0xC6, v)
+    def aci(self, v): self.db(0xCE, v)
     def sui(self, v): self.db(0xD6, v)
     def add(self, s): self.db(0x80 | s)
     def dad(self, rp): self.db(0x09 | (rp << 4))
