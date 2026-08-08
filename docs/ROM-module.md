@@ -310,6 +310,39 @@ One board therefore answers for all five chips, including the one this
 module is missing, and the module's microsecond access times leave the serve
 loop nothing to worry about.
 
+### Reading the scanner's verdict on the wiring
+
+Run `tools/make_moduletest.py`'s image from a monitor socket with the board
+in the module and the sums name the fault outright. Ignore the version-row
+boxes for this — counting them is error-prone, and the sum column is
+unambiguous. Against BASIC-G 3.0, whose good reading is
+`C2E1 EF51 EE09 D0AF CA94 A092 94AB F05F E1A1 E13D` then empty:
+
+| symptom in the sums | fault |
+|---------------------|-------|
+| values repeat in **pairs** (`EE09 D0AF EE09 D0AF`) | A11 stuck high — pin 21 still on +5 V |
+| rows 0–3 and 4–7 are **identical groups of four** | A12 stuck high — X1 lead open |
+| every value appears **twice consecutively** | A10 stuck high — socket pin 19, not one of our leads |
+| all ten present but **out of order** | two bank leads crossed |
+
+The last one is the one this project actually hit, and it is worth knowing
+that it looks nothing like a failure: every block reads correct, so nothing
+is "wrong" anywhere, and only the *order* gives it away. Blocks 4,5 holding
+what belongs at 8,9 and vice versa is A12 and A13 swapped — the X1 and X2
+leads crossed.
+
+### Undriven does not read 0xFF here
+
+**Measured.** Where a bank is absent and the board does not drive, this
+machine reads the module bus as **0x00**, so an unserved 1 KB block sums to
+`0000` and not the `FC00` a floating bus would give. The emulator's model
+(from `RomModule.cpp`) returns `0xFF` for an empty slot, and PMD85-3.md's
+scanner notes say `FC00` means a floating bus; both are describing a module
+that is *absent or dead*, which is a different condition from a module
+present with nothing driving this address. Do not read `0000` as a fault:
+on this card it is the correct signature of a bank the board is right not
+to answer for.
+
 ### Building it
 
 ```
