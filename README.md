@@ -127,7 +127,7 @@ from", chosen at build time:
 | `PAIR` | 0 | two chips | /CS gates, PR *is* the bank bit. The pair-mate must come out. |
 | `FULL8K` | 1 | all four | One flying lead: the other pair's /CS (pin 20 of either empty socket) to the X1 pad. A12 = which select is active, A11 = PR. All three others out. |
 | `HOTSPOT` | 0 | one chip, four images | Reads of four magic addresses switch images — for software written to touch them. **The stock monitor never will**; this mode is for custom/diagnostic ROMs. |
-| `MODULE` | 4 | all five, on a different card | Not a monitor socket: the BASIC ROM module, whose 16 KB window is eight banks behind its own 7442. Four leads bring that decoder's inputs to the board. See [docs/ROM-module.md](docs/ROM-module.md). |
+| `MODULE` | 3 | all five, on a different card | Not a monitor socket: the BASIC ROM module, whose 16 KB window is eight slots behind its own 7442. Three leads bring that decoder's address inputs to the board; a fourth is optional. See [docs/ROM-module.md](docs/ROM-module.md). |
 
 `STATIC` is the default because it is the only mode that is safe no matter
 what else is still in its socket's neighbourhood — it drives exactly when

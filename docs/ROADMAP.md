@@ -94,13 +94,14 @@ window, so hotspot-aware images must keep those four bytes free.
 **Question: does the board serve a card it was never designed for?**
 
 Built and host-tested; not yet run on hardware. `MHB_BANK_SOURCE=MODULE`,
-four flying leads to the module's own 7442, one board in place of five
-chips — of which this machine has only four, so the module cannot be
-repaired any other way. Acceptance test: the machine boots BASIC-G 3.0.
+three flying leads to the module's own 7442 and no modification to board or
+card, one board in place of five chips — of which this machine has only
+four, so the module cannot be repaired any other way. Acceptance test: the
+machine boots BASIC-G 3.0.
 
-Independent of rungs 4–6: a different card, whose faults cannot mask
-theirs. Wiring, the pin-18 modification, and the build line are in
-docs/ROM-module.md.
+Independent of rungs 4–6: a different card, whose faults cannot mask theirs.
+Wiring, the optional fourth lead and when it is worth fitting, and the build
+line are in docs/ROM-module.md.
 
 ## 9. A boot menu in the module — *after 8*
 

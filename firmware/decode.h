@@ -137,18 +137,27 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
 // three leads instead of five, which is what makes it fit.
 #define MHB_MODULE_BANKS  8
 
-// Where each of those lands.  Four leads; the fifth input is already in the
-// socket.  Full wiring, and why pin 18 must be lifted, in docs/ROM-module.md.
+// Where each of those lands.  Three leads, and the strobe is already in the
+// socket.  Full wiring in docs/ROM-module.md.
 //
 //   socket pin 20   /OE    the module's read strobe (PC6)   -- no lead
 //   socket pin 21   A11    from IO2 pin 15 (PC3)            -- pin 21 is NC
 //   X1 pad          A12    from IO2 pin 14 (PC4)
 //   X2 pad          A13    from IO2 pin 13 (PC5)
-//   socket pin 18   park   from IO2 pin 12 (PC7)            -- lift pin 18
+//   socket pin 18   park   from IO2 pin 12 (PC7)            -- OPTIONAL
 //
-// Every one of these is pulled UP in MODULE builds, which makes a detached
-// harness silent rather than wrong: park reads "decoder off", and the three
-// address leads read bank 7, which no BASIC image occupies.
+// The park lead is optional because the monitor's park raises PC7 and PC6
+// in one store (MVI A,FFh / OUT FAh at monit3B EC2D), so the strobe gate
+// already covers it.  PC7 can only matter on its own for a read of module
+// address 0x8000 and up with the strobe still low -- which nothing does,
+// the window being 16 KB.  Without the lead, socket pin 18 stays in the
+// socket carrying a /CSn the decode simply ignores, and no board-side
+// modification is needed at all.
+//
+// The three address leads are pulled UP in MODULE builds, so a harness that
+// has come off reads bank 7.  That is silence for any image which does not
+// fill the window -- and the reason a full 16 KB image should wire the park
+// lead: bank 7 present means a detached harness serves bank 7 instead.
 #define MHB_IDX_MOD_nOE   MHB_IDX_nCS
 #define MHB_IDX_MOD_A11   MHB_IDX_PIN21
 #define MHB_IDX_MOD_A12   MHB_IDX_X1
@@ -168,8 +177,14 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
 // `present` marks which of them carry image data.  Absent banks are never
 // driven, so the machine reads them as the floating bus does -- 0xFF, which
 // is exactly what an unpopulated module socket gives it.
+//
+// `use_park` says whether socket pin 18 carries PC7 by rewiring.  With it,
+// the board is faithful to the card it replaces at every address.  Without
+// it, pin 18 carries a /CSn and is ignored, and the board differs from the
+// original only above module 0x8000 with the strobe low -- an address
+// combination the machine never produces.
 void mhb_build_lut16_module(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
-                            uint8_t present);
+                            uint8_t present, bool use_park);
 
 // ---------------------------------------------------------------------------
 // The 8-bit-entry table: HOTSPOT mode

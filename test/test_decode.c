@@ -296,9 +296,10 @@ static uint16_t module_idx(unsigned addr, unsigned bank, bool oe_low,
 
 static void test_lut16_module(void) {
     // Five banks present: the window as BASIC-G 3.0 leaves it, 10 KB of
-    // image and three banks of nothing.
+    // image and three banks of nothing.  Park lead fitted, so the board is
+    // faithful to the card at every address.
     const uint8_t present = 0x1F;
-    mhb_build_lut16_module(lut16, mod_banks, present);
+    mhb_build_lut16_module(lut16, mod_banks, present, true);
 
     for (unsigned bank = 0; bank < MHB_MODULE_BANKS; bank++) {
         for (unsigned a = 0; a < MHB_BANK_SIZE; a += 149) {
@@ -334,25 +335,59 @@ static void test_lut16_module(void) {
     }
 }
 
+static void test_module_without_park_lead(void) {
+    // The default wiring: three leads, socket pin 18 left carrying a /CSn
+    // this mode ignores.  The board must serve identically for everything
+    // the machine can actually address, and differ from the park build only
+    // where PC7 is set with the strobe still low -- which the machine never
+    // produces, the window being 16 KB.
+    mhb_build_lut16_module(lut16, mod_banks, 0x1F, false);
+    for (unsigned bank = 0; bank < MHB_MODULE_BANKS; bank++) {
+        for (unsigned a = 0; a < MHB_BANK_SIZE; a += 149) {
+            bool here = (0x1F >> bank) & 1;
+
+            // Pin 18 is a /CSn now, so BOTH its levels must serve alike.
+            for (unsigned pin18 = 0; pin18 < 2; pin18++) {
+                uint16_t e = lut16[module_idx(a, bank, true, pin18)];
+                CHECK(!!(e & MHB_LUT16_DRIVE) == here,
+                      "module/nopark: bank %u addr %04X pin18=%u drive wrong",
+                      bank, a, pin18);
+                uint8_t want = here ? fill(bank, a) : 0xFF;
+                CHECK((e & 0xFF) == mhb_scramble_data(want),
+                      "module/nopark: bank %u addr %04X pin18=%u data wrong",
+                      bank, a, pin18);
+                // The strobe is the whole gate, and must still be obeyed.
+                CHECK(!(lut16[module_idx(a, bank, false, pin18)]
+                        & MHB_LUT16_DRIVE),
+                      "module/nopark: drove with /OE high, bank %u addr %04X",
+                      bank, a);
+            }
+        }
+    }
+}
+
 static void test_module_detached_harness(void) {
-    // Every module lead is pulled up in MODULE builds, so a harness that has
-    // come off reads all ones: parked, and bank 7.  Each must independently
-    // mean silence -- this is what makes a broken wire safe, not wrong.
-    mhb_build_lut16_module(lut16, mod_banks, 0x1F);
-    for (unsigned a = 0; a < MHB_BANK_SIZE; a += 211) {
-        uint16_t idx = mhb_index_of(a) | MHB_IDX_MOD_A11 | MHB_IDX_MOD_A12
-                     | MHB_IDX_MOD_A13 | MHB_IDX_MOD_PARK;
-        CHECK(!(lut16[idx] & MHB_LUT16_DRIVE),
-              "module: drove with the whole harness detached, addr %04X", a);
-        CHECK(!(lut16[module_idx(a, 7, true, false)] & MHB_LUT16_DRIVE),
-              "module: drove for absent bank 7, addr %04X", a);
+    // The three address leads are pulled up, so a harness that has come off
+    // reads bank 7 -- which a BASIC-shaped image does not occupy.  That is
+    // what makes a broken wire safe rather than wrong, and it holds with or
+    // without the park lead.
+    for (unsigned park = 0; park < 2; park++) {
+        mhb_build_lut16_module(lut16, mod_banks, 0x1F, park != 0);
+        for (unsigned a = 0; a < MHB_BANK_SIZE; a += 211) {
+            CHECK(!(lut16[module_idx(a, 7, true, true)] & MHB_LUT16_DRIVE),
+                  "module: drove with the harness detached, addr %04X "
+                  "(park=%u)", a, park);
+            CHECK(!(lut16[module_idx(a, 7, true, false)] & MHB_LUT16_DRIVE),
+                  "module: drove for absent bank 7, addr %04X (park=%u)",
+                  a, park);
+        }
     }
 }
 
 static void test_module_full_window(void) {
     // All eight banks present: the whole 16 KB servable, which is what an
     // image beyond BASIC's 10 KB will want.
-    mhb_build_lut16_module(lut16, mod_banks, 0xFF);
+    mhb_build_lut16_module(lut16, mod_banks, 0xFF, true);
     for (unsigned bank = 0; bank < MHB_MODULE_BANKS; bank++) {
         for (unsigned a = 0; a < MHB_BANK_SIZE; a += 307) {
             uint16_t e = lut16[module_idx(a, bank, true, false)];
@@ -362,6 +397,18 @@ static void test_module_full_window(void) {
                   "module: full window data wrong, bank %u addr %04X", bank, a);
         }
     }
+
+    // And the reason a full window wants the park lead: with bank 7 present,
+    // a detached harness no longer lands anywhere harmless, so park is the
+    // only thing left that can silence it.
+    CHECK(lut16[module_idx(0, 7, true, false)] & MHB_LUT16_DRIVE,
+          "module: full window should serve bank 7");
+    CHECK(!(lut16[module_idx(0, 7, true, true)] & MHB_LUT16_DRIVE),
+          "module: park must still silence a full window");
+    mhb_build_lut16_module(lut16, mod_banks, 0xFF, false);
+    CHECK(lut16[module_idx(0, 7, true, true)] & MHB_LUT16_DRIVE,
+          "module: without the park lead nothing silences a full window -- "
+          "if this ever fails the safety note in ROM-module.md is stale");
 }
 
 int main(void) {
@@ -387,6 +434,7 @@ int main(void) {
     test_lut16_static();
     test_lut8_and_masks();
     test_lut16_module();
+    test_module_without_park_lead();
     test_module_detached_harness();
     test_module_full_window();
 

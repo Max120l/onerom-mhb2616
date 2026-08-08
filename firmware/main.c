@@ -214,16 +214,19 @@ static void setup_gpio(void) {
     gpio_init(GPIO_X2);
     gpio_set_dir(GPIO_X2, GPIO_IN);
 #if MHB_BANK_MODULE
-    // MODULE carries real signals on both pads, on socket pin 21, and on
-    // pin 18 -- all four by flying lead.  Pull every one of them UP, which
-    // is the level that makes a lead that has fallen off harmless: park
-    // reads "decoder off" so the board goes silent, and the three address
-    // leads read bank 7, which no BASIC image occupies.  A broken harness
-    // therefore serves nothing rather than serving the wrong bank, and the
-    // status pixel says so by staying red.
+    // MODULE carries module A12/A13 on the pads and A11 on socket pin 21,
+    // all three by flying lead.  Pull them UP: a lead that has come off then
+    // reads bank 7, which no image short of a full window occupies, so the
+    // board goes silent instead of serving the wrong bank and the status
+    // pixel says so by staying red.
     gpio_pull_up(GPIO_X2);
     gpio_pull_up(GPIO_PIN21);
+#if MHB_MODULE_PARK_LEAD
+    // Pin 18 rewired to PC7.  Pulled up too, so a detached park lead reads
+    // "decoder parked" -- silence again, and this time whatever the image
+    // fills.
     gpio_pull_up(GPIO_PR);
+#endif
 #else
     gpio_pull_down(GPIO_X2);
 #endif
@@ -295,7 +298,8 @@ static void build_tables(void) {
     // No socket-side configuration at all: the bank arrives on the leads and
     // the gating is the module's own strobe.  Nothing here is per-socket,
     // which is the point -- one board answers for the whole card.
-    mhb_build_lut16_module(g_lut16, mhb_banks, mhb_bank_present);
+    mhb_build_lut16_module(g_lut16, mhb_banks, mhb_bank_present,
+                           MHB_MODULE_PARK_LEAD);
 #else
     mhb_lut16_cfg_t cfg = {
         .socket_pair = MHB_SOCKET_PAIR,

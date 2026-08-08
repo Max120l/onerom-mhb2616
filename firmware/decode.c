@@ -88,20 +88,22 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
 }
 
 void mhb_build_lut16_module(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
-                            uint8_t present) {
+                            uint8_t present, bool use_park) {
     for (uint32_t idx = 0; idx < MHB_LUT_SIZE; idx++) {
         unsigned addr = mhb_addr_from_index((uint16_t)idx);
         unsigned bank = ((idx & MHB_IDX_MOD_A11) ? 1u : 0u)
                       | ((idx & MHB_IDX_MOD_A12) ? 2u : 0u)
                       | ((idx & MHB_IDX_MOD_A13) ? 4u : 0u);
 
-        // Gate exactly as the chip being replaced: outputs on while the read
-        // strobe is low, and nothing at all while the decoder is parked.  The
-        // monitor parks by writing FFh to port C after every block read
-        // (monit3B, EC2D), which raises both bits in one store.
+        // Gate as the chip being replaced: outputs on while the read strobe
+        // is low.  The monitor parks the card by writing FFh to port C after
+        // every block read (monit3B, EC2D) -- one store that raises PC7 and
+        // PC6 together, so the strobe alone already answers for the park.
+        // The park bit is only consulted when a lead actually carries it;
+        // otherwise pin 18 is a /CSn this mode has no use for.
         bool here = ((present >> bank) & 1) != 0;
-        unsigned drive = !(idx & MHB_IDX_MOD_nOE)
-                      && !(idx & MHB_IDX_MOD_PARK) && here;
+        unsigned drive = !(idx & MHB_IDX_MOD_nOE) && here
+                      && !(use_park && (idx & MHB_IDX_MOD_PARK));
 
         uint8_t byte = here ? banks[bank][addr] : 0xFF;
         lut[idx] = mhb_scramble_data(byte) | (drive ? MHB_LUT16_DRIVE : 0)

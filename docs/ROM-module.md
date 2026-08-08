@@ -16,13 +16,20 @@ chip conventionally.
 ## The board
 
 **DOSKA ROM PAMÄTÍ, 1 PK 280 53, pre typ PMD 85-3.** Sixteen 24-pin socket
-positions in two rows of eight, an 8255 (IO1), a 7442 BCD decoder (IO2),
-and — on the schematic — a hex inverter (IO19) and a transistor switching
-the sockets' Vcc. The sheet carries the note *"osadiť iba pozície uvedené v
-rozpiske"*: populate only the positions named in the parts list. It is a
-universal layout, stuffed per variant — sixteen positions and eight selects
-because the 1 KB builds (BASIC-G 1.0 and 2.0, nine chips) and the 2 KB
-build (3.0, five chips) share one PCB.
+positions drawn in two rows of eight, an 8255 (IO1), a 7442 BCD decoder
+(IO2), and — on the schematic — a hex inverter (IO19) and a transistor
+switching the sockets' Vcc. The sheet carries the note *"osadiť iba pozície
+uvedené v rozpiske"*: populate only the positions named in the parts list.
+It is a universal layout, stuffed per variant, because the 1 KB builds
+(BASIC-G 1.0 and 2.0, nine chips) and the 2 KB build (3.0, five chips)
+share one PCB.
+
+**Measured on the board in hand: the two rows are paired, and each pair
+shares a chip select.** Eight selects, eight sockets fitted. So the card has
+eight 2 KB *slots*, not sixteen — the sixteen drawn positions are two
+footprints per slot, and a slot holds one chip. That matches the window
+arithmetic below from the other direction: eight slots × 2 KB = the 16 KB
+the address lines can reach.
 
 ## Socket wiring
 
@@ -233,28 +240,48 @@ inputs rather than its five outputs.
 | `GPIO_PIN21` | 21 | module A11 | IO2 pin 15 (PC3) |
 | `GPIO_X1` | — | module A12 | IO2 pin 14 (PC4) |
 | `GPIO_X2` | — | module A13 | IO2 pin 13 (PC5) |
-| `GPIO_PR` | 18 | park (A15) | IO2 pin 12 (PC7) |
+| `GPIO_PR` | 18 | park (A15) | IO2 pin 12 (PC7) — **optional** |
 
-Four leads. Socket pin 21 is unconnected on this card, so PC3's lead can be
-soldered to that dead pad and reach the board through the socket with no
-board-side work at all. **Pin 18 is the one modification**: it carries
-`/CS0`, which MODULE mode does not use, so the board's pin 18 must be kept
-out of the socket and the PC7 lead landed on it directly.
+**Three leads, and no modification to anything.** Socket pin 21 is
+unconnected on this card, so PC3's lead solders to that dead pad and reaches
+the board through the socket; X1 and X2 take the other two. Pin 18 stays in
+the socket carrying its slot's `/CSn`, which MODULE mode ignores — and which
+is shared with the slot's other footprint anyway.
 
-Park matters as much as the address bits. The monitor ends every block read
-by writing `FFh` to port C, and a board that ignored PC7 would answer reads
-the machine expects to come back `FFh` — including whatever probes the
-`A15` convention exists for.
+#### Why the park lead is optional
 
-All four leads are **pulled up** in MODULE builds, which is what makes a
-harness that has fallen off safe rather than wrong: park reads "decoder
-off" and the address leads read bank 7, which no BASIC image occupies. A
-broken wire produces a silent board and a red pixel, not a wrong byte.
-`test_module_detached_harness` asserts exactly that.
+It looks essential and is not, and the reason is worth keeping. The monitor
+ends every block read with `MVI A,FFh / OUT FAh` — a single store to port C
+that raises PC7 (decoder off) **and PC6 (`/OE` off) together**. Every park
+the machine actually performs is therefore already caught by the strobe
+gate.
+
+PC7 could only matter on its own for a read of module address 0x8000 or
+above *with the strobe still low*, and nothing produces that: the window is
+16 KB, so the address never reaches A15. Wiring PC7 buys faithfulness at an
+address the machine cannot ask for.
+
+There is one case where it earns itself, below. Fit it with
+`-DMHB_MODULE_PARK_LEAD=ON`, socket pin 18 rewired from its `/CSn` to the
+8255's PC7.
+
+#### What a detached lead does
+
+The three address leads are **pulled up**, so a harness that has come off
+reads bank 7. For any image that does not fill the window that bank is
+absent, the board stays silent, and the pixel stays red: a broken wire gives
+nothing rather than the wrong byte. `test_module_detached_harness` asserts
+it in both wirings.
+
+**A full 16 KB image breaks that property**, because bank 7 is then present
+and a detached harness serves it. That is when the park lead earns itself:
+with pin 18 rewired, a detached park lead reads "parked" and silences the
+board whatever the image holds. A test asserts both halves, including the
+uncomfortable one — that without the lead, nothing silences a full window.
 
 One board therefore answers for all five chips, including the one this
-module is missing — and the module's microsecond access times leave the
-serve loop nothing to worry about.
+module is missing, and the module's microsecond access times leave the serve
+loop nothing to worry about.
 
 ### Building it
 
