@@ -89,19 +89,25 @@ between monitor variants (stock, patched, diagnostic) without reflashing.
 Design constraint recorded now: hotspots default to 0x7F4–0x7F7 of the
 window, so hotspot-aware images must keep those four bytes free.
 
-## 8. MODULE: the BASIC ROM module from one board
+## ~~8. MODULE: the BASIC ROM module from one board~~ — PASSED
 
-**Question: does the board serve a card it was never designed for?**
+**Question: does the board serve a card it was never designed for?
+Answer: yes, all ten blocks.**
 
-Built and host-tested; not yet run on hardware. `MHB_BANK_SOURCE=MODULE`,
-three flying leads to the module's own 7442 and one pin freed from the +5 V
-rail, one board in place of five chips — of which this machine has only
-four, so the module cannot be repaired any other way. Acceptance test: the
-machine boots BASIC-G 3.0.
+`MHB_BANK_SOURCE=MODULE`, three flying leads to the module's own 7442 and
+pin 21 freed from the +5 V rail. The scanner lights the B3 row completely:
+all ten 1 KB blocks of BASIC-G 3.0 correct, read the way the machine reads
+them — through the connector, the module's 8255 and its decode — from one
+board in place of five chips, of which this machine physically has four.
+The missing chip is served like any other.
+
+It took two passes. The first crossed the X1 and X2 leads, which is the
+fault worth remembering because it does not look like one: every block read
+correct and only their *order* was wrong. Both readings from the run are in
+docs/ROM-module.md, along with the sum-column table that names each wiring
+fault without counting boxes.
 
 Independent of rungs 4–6: a different card, whose faults cannot mask theirs.
-Wiring, the optional fourth lead and when it is worth fitting, and the build
-line are in docs/ROM-module.md.
 
 ## 9. A boot menu in the module — *after 8*
 
