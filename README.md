@@ -20,7 +20,8 @@ archive (DS4 "E" = bank 0 … DS7 "B" = bank 3; full table with build
 switches in [docs/PMD85-3.md](docs/PMD85-3.md)).
 
 **2026-08-08: the machine boots.** monit3B served FULL8K from DS4 on a
-Fire 24 rev F, after a year dead. Four faults stacked, each masking the
+Fire 24 rev F, after a year on this bench — and, date codes being 1988,
+possibly decades dead. Four faults stacked, each masking the
 next — a dead 8224 clock generator, dead original ROMs, corroded socket
 contacts (cured by DeOxit left to dwell), and diagnostic images that kept
 removing themselves from the address space, hiding the repair for two

@@ -1,4 +1,10 @@
-# Post-mortem: a year-dead PMD 85-3, booted
+# Post-mortem: a long-dead PMD 85-3, booted
+
+How long is not knowable and worth saying so: a year on the current
+bench, but the date codes say 1988, and between corrupt ROMs and a dead
+clock generator this machine may not have booted in decades. The repo's
+rule applies to its own title — what is verified is stated as fact,
+everything else as a question.
 
 2026-08-08. The machine boots monit3B from a One ROM Fire 24 rev F in
 socket DS4 (FULL8K, one flying lead to the other pair's /CS). This file
@@ -23,8 +29,8 @@ about.
 ### 1. The original ROMs are dead
 
 Established before anything was served: the dumps of the machine's own
-MHB 2616s are corrupt, all of them. This alone accounts for the year of
-failed boots. It is the fault One ROM fixes, and the only one of the
+MHB 2616s are corrupt, all of them. This alone accounts for however long
+the machine has refused to boot. It is the fault One ROM fixes, and the only one of the
 three that was ever going to need it.
 
 ### 2. An intermittent data-path fault killed the served monitor — mechanism known, source unproven
