@@ -143,7 +143,10 @@ Two things this is worth remembering for:
 
 ## The boot contract
 
-**Read off `monit3B.rom` by disassembly; not yet confirmed on hardware.**
+**Read off `monit3B.rom` by disassembly; since confirmed on hardware**
+-- every multiload boot exercises the whole contract live: the E02D
+read, the CCh signature, EC00h's inline arguments and count+1
+transfer, the held strobe, the park.
 
 Two things had to be established before anything could be served here, and
 both are in the monitor rather than on the card.
