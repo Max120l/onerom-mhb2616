@@ -109,6 +109,14 @@ trampoline init) exists for exactly this: run it cold, more than once,
 days apart. Long green with a green blip closes the case; a red or blue
 blip on a green long colour is the intermittent caught in the act.
 
+**Same day, first result: solid green through a freeze-spray cold
+start.** That is the harshest single test on the list — thermal
+contraction is precisely what reopens marginal contacts and cracked
+joints, so an intermittent of either kind should have shown under it.
+The corrosion-cure hypothesis survives its first serious attempt at
+refutation. A couple of ordinary cold mornings over the next days and
+the case is closed.
+
 ## The lessons, in one place
 
 Each of these has a fuller writeup in BOARD-NOTES.md or PMD85-3.md:
