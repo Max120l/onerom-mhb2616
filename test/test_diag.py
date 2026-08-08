@@ -165,12 +165,45 @@ def test_map_stage_names_whichever_write_clears_the_mirror():
             f"candidate {rung}: went past the one that worked"
 
 
-def test_map_stage_says_so_when_nothing_clears_the_mirror():
-    """A latch that never clears is a finding, not a silent green."""
+def test_map_stage_red_x9_does_not_mean_a_broken_machine():
+    """Red x9 is what a HEALTHY PMD 85-3 reports, and that cost a day.
+
+    At reset port C of the 8255 is an input, so PC5 -- which SystemPIO
+    reads as "ROM only" -- is undriven and the mirror stands.  Port A and
+    port B writes do not touch port C.  A BSR sets a latch but leaves the
+    pin undriven.  So not one of the six candidates can clear the mirror on
+    a machine in perfect health, and the sweep saying so is the sweep
+    working.  Only a mode set ends it, which is the `paging` stage.
+    """
     r = run(stage="map", map_clear_ports=())
     assert r["started"] == set(range(N)), "gave up before trying them all"
     assert r["failed"] == {8}, f"named {r['failed']}, want the none-of-them rung"
     assert not r["passed"]
+
+    # ...and the same machine climbs the paging stage without a complaint.
+    r = run(stage="paging", map_clear_ports=())
+    assert not r["failed"], f"a healthy machine failed {r['failed']}"
+    assert r["passed"], "the mode set did not end the mirror"
+
+
+def test_paging_stage_survives_the_rom_less_window():
+    """The trampoline is the whole trick: three bytes executed from RAM."""
+    r = run(stage="paging", map_clear_ports=())
+    assert r["started"] == set(range(8)), f"stopped at {r['started']}"
+
+
+def test_paging_stage_blames_the_mirror_when_it_really_is_stuck():
+    """A machine where even the mode set changes nothing must say so."""
+    rom = make_diag.build(stage="paging")
+    bus = Bus(rom, map_clear_ports=(), sticky_map=True)   # port writes do nothing
+    cpu = CPU(bus)
+    for _ in range(3_000_000):
+        cpu.step()
+        if cpu.halted:
+            break
+    seen = {a - LO for a in bus.rom_reads if LO <= a <= LO + 31}
+    assert make_diag.RUNG_FAILED + 4 in seen, "did not blame the mirror rung"
+    assert make_diag.ALL_PASSED not in seen
 
 
 def test_vram_stage_animates_and_needs_no_ram_reads():

@@ -143,6 +143,7 @@ STAGES = {
     "cpu": {"emit": lambda a, t: emit(a, t), "bit_rungs": (5, 8)},
     "io": {"emit": lambda a, t: emit_io(a, t), "bit_rungs": (5,)},
     "map": {"emit": lambda a, t: emit_map(a, t), "bit_rungs": ()},
+    "paging": {"emit": lambda a, t: emit_paging(a, t), "bit_rungs": (6,)},
     "vram": {"emit": lambda a, t: emit_vram(a, t), "bit_rungs": (), "tail": False},
 }
 for _s in ("iow", "memw", "memr"):
@@ -167,6 +168,102 @@ MAP_CANDIDATES = [
     ("8255 control reg, BSR set PC4", lambda a: (a.mvi(A, 0x09), a.out(0xF7))),
     ("a READ of the 8255", lambda a: a.inp(0xF6)),
 ]
+
+
+def emit_paging(a: Asm, ram_top: int) -> None:
+    """Do what the monitor does, and find out whether this machine survives.
+
+    Everything else has now been eliminated.  The 8228 asserts /MEMR,
+    /MEMW and /IOW; the 8255 receives every write; the processor, the data
+    path and the address lines all pass.  What has never been tried is the
+    one sequence that actually ends the startup mirror -- because at reset
+    port C of the 8255 is an *input*, PC5 reads as "ROM only", and nothing
+    drives it low until a mode set makes port C an output.
+
+    Port A writes cannot do it.  Port B writes cannot do it.  A BSR sets a
+    latch but leaves the pin undriven, so it cannot do it either.  Only
+    `OUT F7h` with bit 7 set can -- and the same instruction drops PC4 and
+    takes the ROM out of the address space, which is why the monitor
+    carries the next few bytes in RAM and why this was worth avoiding until
+    everything else had been ruled out.
+
+    Three outcomes, all of them decisive:
+
+        blue x3   died in the ROM-less window: the trampoline did not come
+                  back, so RAM cannot be READ.  The monitor cannot boot
+                  either, for exactly this reason.
+        red x5    survived, but 0000 still answers with the ROM's C3 -- the
+                  mirror really is stuck, and the 8255 is not what holds it
+        green     the machine is fine, and every earlier verdict of mine
+                  that said otherwise was the instrument talking
+    """
+    # ---- rung 0: alive ---------------------------------------------------
+    a.beacon(RUNG_STARTED + 0)
+
+    # ---- rung 1: build the trampoline, in RAM, blind ----------------------
+    # The mirror sends reads to ROM and writes to RAM, so copying a byte to
+    # the address it already occupies moves it between the two.  It cannot
+    # be verified first: reading it back would read the ROM copy.  The
+    # monitor takes the same gamble at E0A3, and has to.
+    a.beacon(RUNG_STARTED + 1)
+    a.lxi(RP_H, 0x0000)
+    a.mvi(M, 0x5A)                             # something to recognise RAM by
+    a.lxi(RP_H, "tramp")
+    a.mvi(C, 3)
+    a.label("tcopy")
+    a.mov(A, M)                                # from ROM
+    a.mov(M, A)                                # ...to RAM, same address
+    a.inx(RP_H)
+    a.dcr(C)
+    a.jnz("tcopy")
+
+    # ---- rung 2: the mode set --------------------------------------------
+    # Three bytes have to survive in RAM, not four: B is loaded here so the
+    # window needs only MOV A,B rather than MVI A,09h.  Every cell that has
+    # to be right is a cell that can be wrong.
+    a.mvi(B, 0x09)                             # BSR: set PC4
+    a.beacon(RUNG_STARTED + 2)
+    a.mvi(A, 0x82)
+    a.out(0xF7)                                # PC4 and PC5 both fall
+    a.label("tramp")                           # ---- no ROM from here ----
+    a.mov(A, B)
+    a.out(0xF7)                                # PC4 back up: ROM returns
+
+    # ---- rung 3: we came back --------------------------------------------
+    a.beacon(RUNG_STARTED + 3)
+
+    # ---- rung 4: is the mirror finally gone? ------------------------------
+    a.beacon(RUNG_STARTED + 4)
+    a.lxi(RP_H, 0x0000)
+    a.mov(A, M)
+    a.cpi(0xC3)
+    a.jz("fail4")
+
+    # ---- rung 5: and does RAM hold what rung 1 put there? -----------------
+    a.beacon(RUNG_STARTED + 5)
+    a.lxi(RP_H, 0x0000)
+    a.mov(A, M)
+    a.cpi(0x5A)
+    a.jnz("fail5")
+
+    # ---- rung 6: RAM ------------------------------------------------------
+    a.beacon(RUNG_STARTED + 6)
+    emit_ram(a, ram_top, "fail6")
+
+    # ---- rung 7: video RAM ------------------------------------------------
+    a.beacon(RUNG_STARTED + 7)
+    a.lxi(RP_H, VRAM_BASE)
+    a.label("p7loop")
+    a.mov(A, L)
+    a.mov(M, A)
+    a.inx(RP_H)
+    a.mov(A, H)
+    a.cpi(VRAM_TOP)
+    a.jnz("p7loop")
+    a.lxi(RP_H, VRAM_BASE)
+    a.mov(A, M)
+    a.ora(A)
+    a.jnz("fail7")
 
 
 def emit_vram(a: Asm, ram_top: int) -> None:

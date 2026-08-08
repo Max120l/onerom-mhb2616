@@ -136,13 +136,27 @@ class Bus:
             return                      # only the control register pages
         if v & 0x80:
             # Mode set.  It configures port C upper as an output *and*
-            # clears every port C latch on the way, so PC4 goes low and the
-            # ROM leaves the address space.  This is the instruction the
-            # monitor executes from a RAM trampoline, and the reason it has
-            # to.
+            # clears every port C latch on the way.  Two things follow, and
+            # the machine's whole boot depends on both:
+            #
+            #   PC4 goes low  -> the ROM leaves the address space.  This is
+            #                    why the monitor executes the next few bytes
+            #                    from a RAM trampoline.
+            #   PC5 goes low  -> the startup mirror ends.  SystemPIO's
+            #                    WritePaging reads PC5 as "ROM only", and at
+            #                    reset port C is an *input*, so nothing has
+            #                    driven that line low before now.
+            #
+            # That second effect is not gated by map_clear_ports, because it
+            # is not a port write clearing a latch -- it is the 8255 finally
+            # driving the line that selects the map.  A machine where only
+            # this clears the mirror is modelled by map_clear_ports=().
             self.rom_visible = False
+            self.startup_map = False
         elif (v >> 1) & 0x07 == 4:
             self.rom_visible = bool(v & 0x01)      # BSR on PC4
+        elif (v >> 1) & 0x07 == 5:
+            self.startup_map = bool(v & 0x01)      # BSR on PC5: mirror back
 
 
 class CPU:
