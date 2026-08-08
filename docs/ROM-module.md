@@ -43,11 +43,14 @@ confirmed by continuity on the board in hand:
 | 9, 10, 11, 13–17 | D0–D7 | PA0–PA7 |
 | 18 | **/CE** | /CSn from the 7442 |
 | 20 | **/OE** | PC6 |
-| 21 | — | not connected |
+| **21** | **+5 V** | a trace running under the sockets — *measured; the schematic does not draw it* |
 | 12, 24 | GND, Vcc | ground and the +5 V rail |
 
 That is plain JEDEC 2716: both selects active low and both required, pin 21
-unused. Nothing like the CPU board's PR-as-A11 and pair-/CS arrangement.
+strapped to the rail exactly as the CPU board straps it. The schematic shows
+nothing on pin 21, which is a reminder to buzz the pins that "obviously"
+carry nothing — the trace runs under the sockets where a sheet is least
+likely to record it and an eye is least likely to find it. Nothing like the CPU board's PR-as-A11 and pair-/CS arrangement.
 
 That is also an independent confirmation of the 2616's select sense.
 MHB2616.md settles PR as active low from the archive's per-chip socket
@@ -209,11 +212,16 @@ can be booted this way. See ROADMAP.md for what that opens up.
 **Untested on hardware; the reasoning is from the wiring above.**
 
 The 2732 differs from the 2716 in exactly one pin: 21 is A11 rather than
-Vpp. Here pin 21 is unconnected, so a 2732's A11 would float — the only
-thing needing attention. Tie it to Vcc and burn the 2 KB block at 0x800, or
-to GND and burn it at 0x000. Simpler still, burn the block into **both**
-halves and the pin stops mattering, which also means one image works
-whether a given board straps pin 21 or leaves it open.
+Vpp. This card ties pin 21 to +5 V, so a 2732 dropped in reads A11 high
+permanently and behaves as the 2 KB ROM the slot wants — **burn the block at
+0x800**, the top half of the device. Nothing else needs doing: `/CE` from
+the 7442 and `/OE` from PC6 are both active low and both required, which is
+2732 read behaviour unchanged.
+
+Burning the block into **both** halves costs nothing and is worth it anyway:
+the same image then works in this card, in a card that leaves pin 21 open,
+and in the CPU board's monitor sockets, without anyone having to remember
+which is which.
 
 Everything else drops in: `/CE` from the 7442 and `/OE` from PC6 are both
 active low and both required, which is 2732 read behaviour unchanged.
@@ -242,11 +250,30 @@ inputs rather than its five outputs.
 | `GPIO_X2` | — | module A13 | IO2 pin 13 (PC5) |
 | `GPIO_PR` | 18 | park (A15) | IO2 pin 12 (PC7) — **optional** |
 
-**Three leads, and no modification to anything.** Socket pin 21 is
-unconnected on this card, so PC3's lead solders to that dead pad and reaches
-the board through the socket; X1 and X2 take the other two. Pin 18 stays in
-the socket carrying its slot's `/CSn`, which MODULE mode ignores — and which
-is shared with the slot's other footprint anyway.
+**Three leads, and one pin to free.** X1 and X2 take two of them with no
+argument — they are bare pads with nothing else on them. The third has to
+land on a socket pin, and both candidates are already carrying something:
+pin 21 is on the +5 V rail and pin 18 is a `/CSn`.
+
+Pin 21 is the one to take. Nothing on this card needs it — a 2616 ignores
+pin 21 entirely — whereas pin 18 is a live select shared with the slot's
+other footprint. Two ways, and the first is better:
+
+- **Lift the board's pin 21** so it never meets the rail, and solder PC3's
+  lead to it directly. The card stays original; the modification is to the
+  One ROM board, which is the cheap and replaceable half.
+- **Cut pin 21's +5 V feed at the chosen socket** and wire PC3 to the freed
+  pad. Only if you would rather not touch the board — and note the trace
+  runs under the sockets, so check whether cutting it also strands pin 21 on
+  the sockets downstream. That costs nothing today and costs a 2732
+  conversion later.
+
+Pin 18 stays in its socket either way, carrying a `/CSn` this mode ignores.
+
+**Do not simply plug in and wire PC3 to pin 21 without freeing it** — that
+drives an 8255 output into the 5 V rail. The failure if you forget is
+readable rather than dangerous: pin 21 reads high always, so module A11 is
+stuck at 1, the board answers only for odd banks, and BASIC never loads.
 
 #### Why the park lead is optional
 

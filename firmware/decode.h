@@ -141,10 +141,15 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
 // socket.  Full wiring in docs/ROM-module.md.
 //
 //   socket pin 20   /OE    the module's read strobe (PC6)   -- no lead
-//   socket pin 21   A11    from IO2 pin 15 (PC3)            -- pin 21 is NC
+//   socket pin 21   A11    from IO2 pin 15 (PC3)            -- FREE PIN 21
 //   X1 pad          A12    from IO2 pin 14 (PC4)
 //   X2 pad          A13    from IO2 pin 13 (PC5)
 //   socket pin 18   park   from IO2 pin 12 (PC7)            -- OPTIONAL
+//
+// Pin 21 is on the card's +5 V rail (measured; the schematic does not draw
+// it), so it must be freed before PC3 can drive it -- lift the board's pin
+// 21, or cut the feed at that socket.  Forgetting leaves A11 stuck high and
+// the board answering for odd banks only.
 //
 // The park lead is optional because the monitor's park raises PC7 and PC6
 // in one store (MVI A,FFh / OUT FAh at monit3B EC2D), so the strobe gate
