@@ -22,7 +22,7 @@ BEACON_LO = make_ramtest.BEACON_ADDR
 BEACON_HI = BEACON_LO + 31
 
 
-def run(stuck=None, steps=60_000_000, ram_top=0x20):
+def run(stuck=None, steps=60_000_000, ram_top=0x20, **buskw):
     """Run the image; return the set of beacon numbers it lit.
 
     A reduced RAM range by default: March C- is ten operations per cell, so
@@ -34,7 +34,7 @@ def run(stuck=None, steps=60_000_000, ram_top=0x20):
     to its step ceiling instead of to its answer.
     """
     rom = make_ramtest.build(ram_top=ram_top)
-    bus = Bus(rom, stuck=stuck)
+    bus = Bus(rom, stuck=stuck, **buskw)
     cpu = CPU(bus)
     seen = set()
     done = 0
@@ -72,6 +72,18 @@ def test_clean_machine_reports_clean():
     assert 2 in seen, "never completed a pass"
     assert 3 not in seen, "reported a fault on perfect RAM"
     assert not any(b in seen for b in range(4, 15)), "spurious detail beacons"
+
+
+def test_init_survives_a_faithfully_modelled_machine():
+    """The regression that mattered: the init must work when ONLY a mode
+    set ends the mirror -- the real 8255's behaviour -- not just under the
+    any-write-clears-it shortcut the reference emulator uses.  Both prior
+    versions of the init pass the shortcut and fail the machine.
+    """
+    seen = run(map_clear_ports=())
+    assert 1 in seen, "the trampoline did not survive the ROM-less window"
+    assert 2 in seen, "never completed a pass on the faithful model"
+    assert 3 not in seen, "reported a fault on perfect RAM"
 
 
 def test_program_never_touches_the_stack():

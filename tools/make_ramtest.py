@@ -20,7 +20,8 @@ no video, keyboard or serial port involved.
 Beacons, in the order the frame blinks them:
 
      0  running        the processor executed from this image
-     1  map cleared    startup mirror gone, RAM is readable
+     1  map cleared    startup mirror ended by the mode-set trampoline,
+                       verified by read-back: RAM is readable
      2  pass complete  a whole March C- sweep finished
      3  RAM FAULT      at least one byte read back wrong
    4-11 D0..D7         which data bits were ever wrong
@@ -168,35 +169,47 @@ def build(ram_top: int = RAM_TOP) -> bytes:
     # and executed instructions out of this image.
     a.beacon(0)
 
-    # Clear the startup mirror map.  Until this happens, reads below E000
+    # End the startup mirror map.  Until this happens, reads below E000
     # come from ROM, so no memory test is possible at all.
     #
-    # Any write to the system 8255 at F4-F7 clears it.  This one goes to
-    # port A, and that choice is load-bearing.  The obvious thing -- and
-    # what this file used to do -- is to copy the monitor's own sequence,
-    # `MVI A,82h / OUT F7h`.  But F7h is the control register and 82h is a
-    # mode set, and an 8255 mode set clears the port C output latches: PC4
-    # goes low, and PC4 is what puts the ROM at E000-FFFF.  The ROM
-    # therefore leaves the address space on that instruction, and the next
-    # one is fetched from RAM.  The monitor survives it only because it
-    # copies its next four bytes into RAM first and executes them from
-    # there (monit3B E0A3-E0B7).  This program did not, so every result it
-    # produced before this was measured with no ROM in the machine and the
-    # processor running on whatever DRAM happened to hold.
-    #
-    # Port A leaves port C alone, so the mirror clears and the ROM stays.
-    # Port A is an input until something configures it otherwise, so the
-    # byte lands in a latch that drives nothing.
-    a.mvi(A, 0x00)
-    a.out(0xF4)
+    # Only one thing ends it, and the file has now been wrong about this
+    # twice, in opposite directions.  First it copied the monitor's
+    # MVI A,82h / OUT F7h without the monitor's RAM trampoline -- and 82h
+    # is a mode set, which drops PC4 and takes the ROM (this program) out
+    # of the address space, so the program stopped existing mid-flight.
+    # Then it wrote to port A instead, on the theory that any write to the
+    # 8255 clears a latch.  There is no latch.  At reset port C is an
+    # INPUT: PC5, which the paging logic decodes as "ROM only", is simply
+    # an undriven pin, and no port A, port B or BSR write ever drives it.
+    # The mirror IS the 8255's power-on state, and the only exit is the
+    # mode set that makes port C an output -- survived the way the monitor
+    # survives it (monit3B E0A3-E0B7): put the next instructions in RAM
+    # first, because writes go to RAM even under the mirror, and let them
+    # execute from there while the ROM is gone.  B carries the BSR word so
+    # the ROM-less window is three bytes, not four.
+    a.lxi(RP_H, 0x0000)
+    a.mvi(M, 0x5A)                    # a byte to recognise RAM by, blind
+    a.lxi(RP_H, "tramp")
+    a.mvi(C, 3)
+    a.label("tcopy")
+    a.mov(A, M)                       # from ROM...
+    a.mov(M, A)                       # ...to RAM, same address
+    a.inx(RP_H)
+    a.dcr(C)
+    a.jnz("tcopy")
+    a.mvi(B, 0x09)                    # BSR: set PC4
+    a.mvi(A, 0x82)
+    a.out(0xF7)                       # mode set: PC4+PC5 fall, ROM leaves
+    a.label("tramp")                  # ---- no ROM from here ----
+    a.mov(A, B)
+    a.out(0xF7)                       # BSR sets PC4: ROM returns
 
-    # ...and prove it, because a test that is silently still reading ROM
-    # reports a perfect machine.  0000 in this image is C3, the entry jump;
-    # writes have gone to RAM all along, so a byte written and read back
-    # must not come back as C3.  If it does, park without beacon 1 -- the
+    # ...and prove the mirror is gone, because a test that is silently
+    # still reading ROM reports a perfect machine.  0000 in this image is
+    # C3, the entry jump; the write above went to RAM all along, so the
+    # read-back must not be C3.  If it is, park without beacon 1 -- the
     # lamp then says "running, no pass yet" forever, which is true.
     a.lxi(RP_H, 0x0000)
-    a.mvi(M, 0x5A)
     a.mov(A, M)
     a.cpi(0xC3)
     a.label("nomap")
