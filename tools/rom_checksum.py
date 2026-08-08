@@ -22,6 +22,16 @@ is the whole point when the chip is dying.  Mismatch counts against every
 bank are printed, so a marginal verdict is visible as marginal:
 
     ./rom_checksum.py --identify pmd85-3.bin ds4_dump.bin ds6_dump.bin
+
+When a chip has decayed far enough that counting *bytes* stops working --
+past about a quarter of them wrong, everything looks equally unlike every
+bank -- identification falls back to counting **bits**, which keeps working
+almost to the end.  An MHB 2616 in this machine dies by losing set bits and
+never by gaining them, so a dump of bank B can hold no bit that B does not
+also hold.  One bank leaves zero such impossible bits and every other bank
+leaves hundreds, which names the chip from a few dozen survivors: the
+module's fourth chip was identified from 32 surviving bits out of 16384,
+0.4% of the die, and still unambiguously.
 """
 
 import argparse
@@ -38,6 +48,13 @@ BANK_SIZE = 2048
 # confident label.
 IDENT_MAX_BAD = BANK_SIZE // 4          # <= 25% bytes wrong of the best bank
 IDENT_MIN_GAP = BANK_SIZE // 8          # ...and the runner-up clearly worse
+
+# Bit-decay identification needs enough surviving bits that agreement cannot
+# be luck.  A wrong bank sets roughly half the bits the right one does, so a
+# coincidental clean pass runs at about 2**-k for k survivors; 32 puts that
+# near one in four billion per bank, which is decisive against the handful of
+# banks any reference image has.  Chips below this are reported, not named.
+DECAY_MIN_EVIDENCE = 32
 
 
 def banks_of(raw: bytes):
@@ -71,6 +88,51 @@ def compare(ref: Path, dump: Path) -> int:
     return 1
 
 
+def decay_scores(raw: bytes, bank: bytes):
+    """Bits in `raw` that no amount of decay could explain, both directions.
+
+    Returns (falling, rising).  `falling` counts bits the dump has set that
+    the bank does not -- impossible if the chip only ever loses set bits.
+    `rising` counts the mirror case, for a part that rots towards FF instead.
+    Whichever direction a chip is dying in, the right bank scores zero on it.
+    """
+    falling = sum(bin(x & ~y & 0xFF).count("1") for x, y in zip(raw, bank))
+    rising = sum(bin(~x & y & 0xFF).count("1") for x, y in zip(raw, bank))
+    return falling, rising
+
+
+def identify_by_decay(raw: bytes, ref_banks: list) -> bool:
+    """Name a bank from surviving bits alone.  True if it succeeded."""
+    # Evidence is whatever the decay did not take: survivors under a falling
+    # model, bits still clear under a rising one.  A dump decayed to all-00
+    # (or all-FF) matches every bank trivially and must not be named, which
+    # is exactly what having no evidence means.
+    scored = [decay_scores(raw, bank) for bank in ref_banks]
+    for direction, index, evidence in (
+            ("losing set bits", 0, sum(bin(x).count("1") for x in raw)),
+            ("gaining set bits", 1, sum(8 - bin(x).count("1") for x in raw))):
+        impossible = [s[index] for s in scored]
+        clean = [b for b, n in enumerate(impossible) if n == 0]
+        if len(clean) != 1:
+            continue
+        best = clean[0]
+        counts = "  ".join(f"bank {b}: {n}" for b, n in enumerate(impossible))
+        print(f"  bits inconsistent with a chip {direction} -- {counts}")
+        if evidence < DECAY_MIN_EVIDENCE:
+            print(f"  -> bank {best} is the only bank consistent with this "
+                  f"dump, but only {evidence} bits survive to say so "
+                  f"(under {DECAY_MIN_EVIDENCE}); too little to name it")
+            return False
+        runner_up = min(n for b, n in enumerate(impossible) if b != best) \
+            if len(impossible) > 1 else None
+        gap = "" if runner_up is None else \
+            f", against {runner_up} for the next-best bank"
+        print(f"  -> bank {best}, from {evidence} surviving bits alone"
+              f"{gap} -- too far gone to match by bytes, but not by bits")
+        return True
+    return False
+
+
 def identify(ref_path: Path, dumps: list) -> int:
     ref = ref_path.read_bytes()
     if len(ref) % BANK_SIZE:
@@ -98,7 +160,7 @@ def identify(ref_path: Path, dumps: list) -> int:
             print(f"  -> bank {best}, with {scores[best]} bad bytes "
                   f"({100 * scores[best] // BANK_SIZE}% of the chip) -- a "
                   f"degraded chip, but unambiguously this bank")
-        else:
+        elif not identify_by_decay(raw, ref_banks):
             print("  -> no clear match; this dump does not resemble any bank "
                   "of the reference")
             failed = True

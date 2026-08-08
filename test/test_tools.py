@@ -166,3 +166,60 @@ def test_identify_rejects_garbage(tmp_path):
     res = run_checksum("--identify", ref, junk)
     assert res.returncode == 1
     assert "no clear match" in res.stdout
+
+
+def test_identify_by_bit_decay(tmp_path):
+    # Past ~25% of bytes wrong every bank looks equally unlike the dump, so
+    # the byte count gives up.  Bits do not: this chip keeps one byte in 23
+    # and reads 00 everywhere else, which is hopeless to match by bytes and
+    # still names its bank outright.
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+    wreck = tmp_path / "wreck.bin"
+    wreck.write_bytes(bytes(b if i % 23 == 0 else 0
+                            for i, b in enumerate(banks[3])))
+    res = run_checksum("--identify", ref, wreck)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "-> bank 3, from" in res.stdout
+    assert "surviving bits alone" in res.stdout
+
+
+def test_identify_by_bit_decay_the_other_direction(tmp_path):
+    # The mirror failure -- a part rotting towards FF rather than 00.  Same
+    # reasoning, opposite polarity, and the tool must say which it saw.
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+    wreck = tmp_path / "wreck.bin"
+    wreck.write_bytes(bytes(b if i % 23 == 0 else 0xFF
+                            for i, b in enumerate(banks[2])))
+    res = run_checksum("--identify", ref, wreck)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "gaining set bits" in res.stdout
+    assert "-> bank 2, from" in res.stdout
+
+
+def test_identify_refuses_a_chip_with_too_little_left(tmp_path):
+    # Consistent with exactly one bank, but on so few surviving bits that
+    # agreement could be luck.  Naming it anyway is the failure mode this
+    # threshold exists to prevent.
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(bytes([0x01]) * 2048 + bytes([0x02]) * 2048)
+    faint = tmp_path / "faint.bin"
+    faint.write_bytes(bytes(0x01 if i < 3 else 0 for i in range(2048)))
+    res = run_checksum("--identify", ref, faint)
+    assert res.returncode == 1
+    assert "too little to name it" in res.stdout
+
+
+def test_identify_refuses_a_chip_with_nothing_left(tmp_path):
+    # All-zero matches every bank trivially; that is not an identification.
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+    dead = tmp_path / "dead.bin"
+    dead.write_bytes(bytes(2048))
+    res = run_checksum("--identify", ref, dead)
+    assert res.returncode == 1
+    assert "no clear match" in res.stdout

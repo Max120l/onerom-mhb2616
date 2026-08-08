@@ -54,7 +54,10 @@ project, for a milder reason: the Fire 24 is treated as a well-documented
 RP2350 carrier board with a known socket-to-GPIO map.
 
 The chip itself, what the schematic settled about its pins, and the caveats
-that remain: [docs/MHB2616.md](docs/MHB2616.md).
+that remain: [docs/MHB2616.md](docs/MHB2616.md). The same chip is wired
+quite differently on the BASIC ROM module — plain JEDEC 2716 there, which
+is both a warning against generalising and an independent confirmation of
+the select senses: [docs/ROM-module.md](docs/ROM-module.md).
 
 ## What the PMD 85-3 does with them
 
