@@ -17,8 +17,14 @@ the machine's favour:
 **two chips replaceable with zero wires, all four with one**. The
 bank-to-socket assignment is settled byte-for-byte from the Infoserver ROM
 archive (DS4 "E" = bank 0 … DS7 "B" = bank 3; full table with build
-switches in [docs/PMD85-3.md](docs/PMD85-3.md)). Next stop is the
-machine. This is a sibling
+switches in [docs/PMD85-3.md](docs/PMD85-3.md)).
+
+**2026-08-08: the machine boots.** monit3B served FULL8K from DS4 on a
+Fire 24 rev F, after a year dead. Three faults stacked — dead original
+ROMs, a bad joint on the video circuit's MH7474, and diagnostic images
+that kept removing themselves from the address space — and
+[docs/POST-MORTEM.md](docs/POST-MORTEM.md) tells that story in full.
+This is a sibling
 of [onerom-1801re2](https://github.com/Max120l/onerom-1801re2) and inherits
 its habit: what has been verified is stated as fact, everything else as a
 question.
