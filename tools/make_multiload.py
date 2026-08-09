@@ -55,6 +55,20 @@ from pathlib import Path
 
 from make_ramtest import Asm, B, C, D, E, H, L, M, A, RP_B, RP_D, RP_H, RP_SP
 from make_screentest import FONT, glyph_byte
+import ptp_lib
+
+
+def tape_block(path, program):
+    """A simple tape program's (payload, load address).  Turbo-loader
+    programs are refused: their memory image is assembled by a loader the
+    extraction pipeline does not fully model yet."""
+    p = ptp_lib.find_program(path, program)
+    if p['raws']:
+        raise SystemExit(
+            f"error: {program} is a turbo-loader program ({len(p['raws'])} "
+            f"raw blocks after the body); only plain one-block programs "
+            f"can be shelved from tape so far")
+    return bytes(p['body']), p['start']
 
 PAGE = 16384
 HOTSPOT_MODULE_ADDR = 0x3FE0     # module address of hotspot 0; +n names page n
@@ -67,7 +81,13 @@ MENU_MAX = 0x0F00                # ...and how big it may grow
 MENU_SP = 0xAF00                 # menu stack, below the menu
 
 EC00 = 0xEC00                    # the monitor's block-read routine
+EC00_V2 = 0x8C00                 # the same routine, at its -2-mode address
 STUB_RAM = 0xC1B2                # where the monitor executes a module stub
+
+STAGE2_ORG = 0xB000              # where a multi-page cartridge's chunk
+STAGE2_MAX = 0x0100              # loader runs; generated per cartridge
+PAYLOAD2_BASE = PAYLOAD_BASE + STAGE2_MAX   # first chunk, page 1
+PAGE_CHUNK = 0x3FC0              # payload ceiling per page (hotspots above)
 
 # Stack for the boot replay: top of the last readable VRAM line's invisible
 # margin.  Two or three pushes deep, all landing in bytes the screen never
@@ -377,7 +397,95 @@ def page_from_rmm(data: bytes, name: str, v2: bool = False) -> bytes:
     return data + bytes(PAGE - len(data))
 
 
-def page_from_binary(payload: bytes, load: int, exec_: int, name: str) -> bytes:
+def emit_hotspot_touch(a: MAsm) -> None:
+    """A = page: touch its hotspot and sit out the board's rebuild.
+    Same dance as the menu's, as a callable for the stage-2 loader."""
+    a.label("hs_touch")
+    a.adi(0xE0)
+    a.mov(E, A)
+    a.mvi(A, 0x90)
+    a.out(0xFB)
+    a.mov(A, E)
+    a.out(0xF9)
+    a.mvi(A, HOTSPOT_MODULE_ADDR >> 8)
+    a.out(0xFA)
+    a.mvi(A, 0xFF)
+    a.out(0xFA)
+    a.lxi(RP_B, DELAY_ITERS)
+    a.label("hs_dly")
+    a.dcx(RP_B)
+    a.mov(A, B)
+    a.ora(C)
+    a.jnz("hs_dly")
+    a.ret()
+
+
+def build_stage2(chunks: list, exec_: int, v2: bool) -> bytes:
+    """The chunk loader for a multi-page cartridge: for each (page, src,
+    count, dest), page in and block-read; then stack up and jump.  Runs at
+    STAGE2_ORG, calls the monitor's reader at its generation's address --
+    which is the only difference v2 makes here."""
+    routine = EC00_V2 if v2 else EC00
+    a = MAsm(STAGE2_ORG)
+    cur = None
+    for page, src, count, dest in chunks:
+        if page != cur:
+            a.mvi(A, page)
+            a.call("hs_touch")
+            cur = page
+        a.call(routine)
+        a.db(src & 0xFF, src >> 8, count & 0xFF, count >> 8,
+             dest & 0xFF, dest >> 8)
+    a.lxi(RP_SP, 0xBFF0)             # the state the verified cold entry used
+    a.jmp(exec_)
+    emit_hotspot_touch(a)
+    out = a.link()
+    if len(out) > STAGE2_MAX:
+        raise SystemExit(f"error: stage-2 loader is {len(out)} bytes, "
+                         f"budget {STAGE2_MAX}")
+    return out
+
+
+def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
+                     first_page: int, v2: bool) -> list:
+    """Pages for a binary too big for one page.  Page 1: stub + stage-2 +
+    first chunk; continuation pages: raw chunks from offset 0."""
+    if load + len(payload) > 0xC000:
+        raise SystemExit(f"error: {name} would load over "
+                         f"{load + len(payload) - 1:04X}; RAM ends at BFFF")
+    if load <= STAGE2_ORG + STAGE2_MAX and load + len(payload) > STAGE2_ORG:
+        raise SystemExit(f"error: {name} loads over the stage-2 loader at "
+                         f"{STAGE2_ORG:04X}; not supported yet")
+    chunks = []
+    off = 0
+    page = first_page
+    src0 = PAYLOAD2_BASE
+    while off < len(payload):
+        n = min(len(payload) - off, PAGE_CHUNK - src0)
+        chunks.append((page, src0, ec_count(n), load + off, off, n))
+        off += n
+        page += 1
+        src0 = 0
+    stage2 = build_stage2([(p, s, c, d) for p, s, c, d, _, _ in chunks],
+                          exec_, v2)
+    sig = 0xCD if v2 else 0xCC
+    stub = bytearray(boot_stub(PAYLOAD_BASE, ec_count(len(stage2)),
+                               STAGE2_ORG, STAGE2_ORG))
+    stub[0] = sig
+    stub[2] = (EC00_V2 if v2 else EC00) >> 8
+    pages = []
+    for k, (p, s, c, d, o, n) in enumerate(chunks):
+        if k == 0:
+            head = bytes(stub) + bytes(PAYLOAD_BASE - len(stub)) + stage2
+            head += bytes(PAYLOAD2_BASE - len(head))
+            pages.append(pad_page(head + payload[o:o + n]))
+        else:
+            pages.append(pad_page(payload[o:o + n]))
+    return pages
+
+
+def page_from_binary(payload: bytes, load: int, exec_: int, name: str,
+                     v2: bool = False) -> bytes:
     if PAYLOAD_BASE + len(payload) > HOTSPOT_MODULE_ADDR:
         raise SystemExit(f"error: {name} is {len(payload)} bytes; at most "
                          f"{HOTSPOT_MODULE_ADDR - PAYLOAD_BASE} fit a page")
@@ -389,8 +497,14 @@ def page_from_binary(payload: bytes, load: int, exec_: int, name: str) -> bytes:
     if not (load <= exec_ < load + len(payload)):
         raise SystemExit(f"error: {name}: exec {exec_:04X} outside the "
                          f"loaded image")
-    stub = boot_stub(PAYLOAD_BASE, ec_count(len(payload)), load, exec_)
-    return pad_page(stub + bytes(PAYLOAD_BASE - len(stub)) + payload)
+    stub = bytearray(boot_stub(PAYLOAD_BASE, ec_count(len(payload)),
+                               load, exec_))
+    if v2:
+        # A -2-mode cartridge: the compat monitor's signature and its
+        # relocated reader.  Otherwise identical -- same ABI to the byte.
+        stub[0] = 0xCD
+        stub[2] = EC00_V2 >> 8
+    return pad_page(bytes(stub) + bytes(PAYLOAD_BASE - len(stub)) + payload)
 
 
 def build_pages(entries: list, root: Path) -> tuple:
@@ -407,21 +521,31 @@ def build_pages(entries: list, root: Path) -> tuple:
         name = ent["name"].upper()
         page_no = len(pages)
         kind = ent.get("type", "rmm")
+        v2 = ent.get("mode") == "v2" or kind == "rmm2"
         if kind in ("rmm", "rmm2"):
             data = (root / ent["file"]).read_bytes()
             pages.append(page_from_rmm(data, ent["file"], v2=(kind == "rmm2")))
-        elif kind == "binary":
-            payload = (root / ent["file"]).read_bytes()
-            load = int(ent["load"], 0)
-            exec_ = int(ent.get("exec", ent["load"]), 0)
-            pages.append(page_from_binary(payload, load, exec_, ent["file"]))
+        elif kind in ("binary", "tape"):
+            if kind == "tape":
+                payload, load = tape_block(root / ent["file"], ent["program"])
+                exec_ = int(ent["exec"], 0) if "exec" in ent else load
+            else:
+                payload = (root / ent["file"]).read_bytes()
+                load = int(ent["load"], 0)
+                exec_ = int(ent.get("exec", ent["load"]), 0)
+            what = ent.get("program", ent.get("file", name))
+            if PAYLOAD_BASE + len(payload) > HOTSPOT_MODULE_ADDR:
+                pages.extend(multipage_binary(payload, load, exec_, what,
+                                              page_no, v2))
+            else:
+                pages.append(page_from_binary(payload, load, exec_, what,
+                                              v2=v2))
         elif kind == "demo":
             payload, load, exec_ = build_demo()
             pages.append(page_from_binary(payload, load, exec_, "demo"))
         else:
             raise SystemExit(f"error: unknown entry type {kind!r}")
-        menu_entries.append({"name": name, "page": page_no,
-                             "v2": kind == "rmm2"})
+        menu_entries.append({"name": name, "page": page_no, "v2": v2})
     if len(pages) > MAX_PAGES:
         raise SystemExit(f"error: {len(pages)} pages; hotspot addressing "
                          f"reaches {MAX_PAGES}")
@@ -452,9 +576,16 @@ def emit_c(path: Path, name: str, pages: list, menu_entries: list) -> None:
            f"const unsigned mhb_page_count = {len(pages)};", "",
            f"const uint8_t mhb_pages[{len(pages)}][MHB_BANKS][MHB_BANK_SIZE]"
            " = {"]
+    labels = ["menu"] + ["?"] * (len(pages) - 1)
+    for k, e in enumerate(menu_entries):
+        last = (menu_entries[k + 1]["page"] if k + 1 < len(menu_entries)
+                else len(pages))
+        for p in range(e["page"], last):
+            n = last - e["page"]
+            labels[p] = e["name"] if n == 1 else \
+                f"{e['name']} ({p - e['page'] + 1}/{n})"
     for p, page in enumerate(pages):
-        label = "menu" if p == 0 else menu_entries[p - 1]["name"]
-        out.append(f"    // page {p}: {label}")
+        out.append(f"    // page {p}: {labels[p]}")
         out.append("    {")
         for b in range(8):
             out.append(f"        {{ // bank {b}")

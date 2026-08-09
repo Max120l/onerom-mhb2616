@@ -136,12 +136,21 @@ Since the hardware pass, the shelf also reaches back a generation:
 `rmm2` entries boot PMD 85-2 modules through the -3 monitor's own
 `JMP FFF0h` compatibility switch — no firmware change, one menu action.
 Confirmed on hardware the same day: BASIC 2A boots from its key,
-the machine relocating itself into a PMD 85-2 mid-menu.  Remaining
-candidates, in rising ambition: programs larger
-than one page (chunked loading across page switches); `.ptp` tape-file
-conversion into shelf entries; composite pages (a BASIC plus the module
-software it loads, e.g. `wurmi`/`kli2`, which have no boot stub of their
-own); more than 16 entries.
+the machine relocating itself into a PMD 85-2 mid-menu.
+
+Both of the next two rungs landed together after a games archive
+arrived: **multi-page cartridges** (a generated stage-2 pages chunks in
+through the same touch-and-wait contract, `Jet Set Willy` at 30.7 KB
+being the customer) and **tape entries** (`.ptp` programs shelved by
+name; the -2-environment ones boot through FFF0h). Host-tested through
+the real ROM end to end -- menu key to Willy's title screen.
+
+Remaining, in rising ambition: turbo-loader tape extraction (three
+games land byte-complete but their entry state is not yet right; two
+stall on reader framing -- docs/ROM-module.md carries the full state of
+knowledge); composite pages (a BASIC plus the module software it
+loads, e.g. `wurmi`/`kli2`, which have no boot stub of their own); more
+than 16 entries.
 
 ## Parked
 

@@ -441,9 +441,47 @@ Manifest, and what the tool enforces:
   stub of either kind — they were loaded by other software, typically
   BASIC's module commands, and need their native loader on the same page:
   future work;
-- a binary must fit one page (~16.2 KB) and load inside `0000–BFFF`;
-  bigger or multi-segment programs are future work;
+- a binary loads inside `0000–BFFF`; one too big for a page is split
+  automatically — the stub loads a generated stage-2 to `B000h`, which
+  pages chunks in with the same touch-and-wait contract the menu uses
+  and then jumps (so a multi-page cartridge must not load over
+  `B000–B0FF`);
+- `binary` takes `"mode": "v2"` for programs that want the -2
+  environment — the stub gets the `CDh` signature and calls the
+  relocated reader at `8C00h`, and the menu boots the page through
+  `FFF0h`;
+- `tape` shelves a program straight out of a `.ptp` tape archive by
+  name — plain one-block programs only, loaded at the header's start
+  field. Turbo-loader programs (a small body followed by headerless raw
+  blocks) are refused with their structure called out;
 - `demo` generates a self-test cartridge, useful as the shelf's proof.
+
+### Tape games, and what the archive taught
+
+Verified end to end in the emulator against the real ROMs, from the
+ZO Svazarmu 4004/482 collection: **Jet Set Willy** (`WILLY2`) — a
+one-block tape image, `"mode": "v2"`, entry `0000h` — boots from the
+menu through the whole chain: `FFF0h`, the manufactured -2 monitor, a
+two-page chunked load through `8C00h`, title screen drawn. The
+multi-page machinery exists because of it.
+
+The route matters more than the one game: these tape programs call the
+`8000h` monitor, so on a -3 they live in -2 mode — that is *why* the
+collection's model tables list "3" for them, and why the shelf boots
+them through the machine's own switch rather than natively.
+
+Not yet shelved, recorded so the next attempt starts where this one
+stopped: most of the collection uses **turbo loaders** — a small `?`
+body at `7Fxxh` that pulls headerless raw blocks through the monitor's
+tape reader with tightened timing, machine-sniffed via `LDA 8000h /
+CPI C3h` (monit1 begins with `C3h`, the -2 monitors with `31h`).
+Executing the loaders against real monitor images over a byte-level
+USART model recovers memory maps (BLUDISTE, PEXESO, PEXESO2 land
+completely; their cold-entry state is still wrong — the screen draws
+with a stride shear, so the handoff capture is incomplete). HORACE+2
+loads but its entry is not the header field, which holds text.
+PISQORKY and HLIPA stall on their readers' framing.
+`tools/ptp_lib.py` carries the container format.
 
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire

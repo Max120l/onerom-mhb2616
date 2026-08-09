@@ -293,6 +293,66 @@ def test_v2_reset_lands_at_the_v3_prompt():
     assert bus.ram[ml.STUB_RAM] == 0xCD
 
 
+def test_multipage_binary_boots_across_page_switches(tmp_path):
+    # A payload too big for one page: the stub loads a generated stage-2,
+    # which pages chunks in with the same touch-and-wait contract the menu
+    # uses, then jumps.  Synthetic 20 KB payload, -3 mode, fake monitor.
+    payload = bytes((i * 89 + 31) & 0xFF for i in range(20_000))
+    g = tmp_path / "big.bin"
+    g.write_bytes(payload)
+    pages, ents = ml.build_pages(
+        [{"type": "binary", "name": "BIG", "file": "big.bin",
+          "load": "0x1000", "exec": "0x1000"}], tmp_path)
+    assert len(pages) == 3, "menu + two cartridge pages expected"
+    bus = Bus(fake_monitor(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    bus.press(0, 2)                               # key "1"
+    assert run_until_pc(cpu, 0x1000, 8_000_000), "big binary never entered"
+    assert bytes(bus.ram[0x1000:0x1000 + len(payload)]) == payload
+    # Page switches: the menu touches page 1, stage-2 re-touches it (cheap,
+    # idempotent) and then pages to 2.  Every touch honours the delay.
+    assert [p for _, p in bus.page_events] == [1, 1, 2]
+    for k, (t, _) in enumerate(bus.page_events):
+        later = [c for c, _ in bus.mod_reads if c > t]
+        if later:
+            assert later[0] - t >= DELAY_MIN_CLOCKS, \
+                f"switch {k}: only {later[0] - t} clocks of silence"
+
+
+def test_willy2_boots_through_the_compat_monitor():
+    # The full prize chain, against the real ROM: menu -> key -> hotspot ->
+    # JMP FFF0 -> the -3 relocates its own -2 monitor -> CD stub -> stage-2
+    # pages 30.7 KB across two pages through the relocated reader at 8C00h
+    # -> JMP 0000 -> Jet Set Willy draws its title screen.
+    import pytest
+    GAMES = SCRATCH / "games/games-4004-482.ptp"
+    if not (MONIT3B.exists() and GAMES.exists()):
+        pytest.skip("reference ROMs/games not present")
+    import ptp_lib
+    prog = ptp_lib.find_program(GAMES, "WILLY2")
+    payload = bytes(prog['body'])
+
+    pages, ents = ml.build_pages(
+        [{"type": "rmm", "name": "BASIC-G 3.0", "file": BASIC3.name},
+         {"type": "tape", "name": "JET SET WILLY", "file": str(GAMES),
+          "program": "WILLY2", "mode": "v2", "exec": "0x0000"}],
+        BASIC3.parent)
+    bus = Bus(MONIT3B.read_bytes(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    bus.press(1, 2)                               # key "2"
+    assert run_until_pc(cpu, 0x8000, 8_000_000), "FFF0 never landed"
+    assert run_until_pc(cpu, ml.STAGE2_ORG, 8_000_000), "stage-2 not entered"
+    assert run_until_pc(cpu, 0x0000, 30_000_000), "game never entered"
+    assert bytes(bus.ram[0:len(payload)]) == payload, \
+        "image differs at the moment of entry"
+    run_steps(cpu, 2_500_000)                     # let the title draw
+    lit = sum(1 for ln in range(256) for c in range(48)
+              if bus.ram[0xC000 + ln * 64 + c])
+    assert lit > 1500, f"title screen did not draw ({lit} lit bytes)"
+
+
 def test_pack_tool_refuses_the_refusable(tmp_path):
     import pytest
     # An rmm that cannot boot.

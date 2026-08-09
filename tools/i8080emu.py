@@ -137,6 +137,8 @@ class Bus:
         # poke the matrix from a test.
         self.key_columns = [0] * 16
         self.sys_a = 0            # system port A latch (column select)
+        self.shift = False        # PB5, active low on read
+        self.stop = False         # PB6, active low on read
 
     def read(self, a: int) -> int:
         a &= 0xFFFF
@@ -208,8 +210,11 @@ class Bus:
             # ports themselves, IN / INR / OUT.
             return self.mod_b if reg == 1 else self.mod_c
         if port == 0xF5:
-            # Rows of the selected column, active low, shift/stop unpressed.
-            return (~self.key_columns[self.sys_a & 0x0F] & 0x1F) | 0x60
+            # Rows of the selected column, active low; shift and stop
+            # likewise on bits 5 and 6.
+            return ((~self.key_columns[self.sys_a & 0x0F] & 0x1F)
+                    | (0 if self.shift else 0x20)
+                    | (0 if self.stop else 0x40))
         return 0xFF
 
     def out(self, port: int, v: int) -> None:
@@ -332,22 +337,29 @@ class CPU:
         if op == 0:                          # ADD
             r = a + v
             self.cy = r > 0xFF
+            self.ac = ((a & 0xF) + (v & 0xF)) > 0xF
         elif op == 1:                        # ADC
-            r = a + v + self.cy
+            c = 1 if self.cy else 0
+            r = a + v + c
             self.cy = r > 0xFF
+            self.ac = ((a & 0xF) + (v & 0xF) + c) > 0xF
         elif op in (2, 3, 7):                # SUB / SBB / CMP
-            sub = v + (self.cy if op == 3 else 0)
-            r = a - sub
+            b = 1 if (op == 3 and self.cy) else 0
+            r = a - v - b
             self.cy = r < 0
+            self.ac = ((a & 0xF) - (v & 0xF) - b) >= 0
         elif op == 4:                        # ANA
             r = a & v
             self.cy = False
+            self.ac = bool((a | v) & 0x08)   # 8080 quirk: OR of bit 3s
         elif op == 5:                        # XRA
             r = a ^ v
             self.cy = False
+            self.ac = False
         else:                                # ORA
             r = a | v
             self.cy = False
+            self.ac = False
         r &= 0xFF
         self.szp(r)
         if op != 7:                          # CMP discards the result
@@ -403,14 +415,18 @@ class CPU:
                             self.get_rp(mid >> 1) + (-1 if op & 8 else 1))
                 return
             if lo == 4:                                 # INR
-                v = (self.get(mid) + 1) & 0xFF
+                old = self.get(mid)
+                v = (old + 1) & 0xFF
                 self.put(mid, v)
                 self.szp(v)
+                self.ac = (old & 0xF) == 0xF
                 return
             if lo == 5:                                 # DCR
-                v = (self.get(mid) - 1) & 0xFF
+                old = self.get(mid)
+                v = (old - 1) & 0xFF
                 self.put(mid, v)
                 self.szp(v)
+                self.ac = (old & 0xF) != 0
                 return
             if lo == 6:                                 # MVI
                 self.put(mid, self.fetch())
@@ -423,6 +439,25 @@ class CPU:
                 elif op == 0x0F:                        # RRC
                     self.cy = bool(a & 1)
                     self.r["A"] = ((a >> 1) | (self.cy << 7)) & 0xFF
+                elif op == 0x17:                        # RAL
+                    c = 1 if self.cy else 0
+                    self.cy = bool(a & 0x80)
+                    self.r["A"] = ((a << 1) | c) & 0xFF
+                elif op == 0x1F:                        # RAR
+                    c = 0x80 if self.cy else 0
+                    self.cy = bool(a & 1)
+                    self.r["A"] = (a >> 1) | c
+                elif op == 0x27:                        # DAA
+                    add = 0
+                    if (a & 0x0F) > 9 or self.ac:
+                        add = 0x06
+                    if (a >> 4) > 9 or self.cy or \
+                            ((a >> 4) == 9 and (a & 0x0F) > 9):
+                        add += 0x60
+                        self.cy = True
+                    self.ac = ((a & 0xF) + (add & 0xF)) > 0xF
+                    self.r["A"] = (a + add) & 0xFF
+                    self.szp(self.r["A"])
                 elif op == 0x2F:                        # CMA
                     self.r["A"] = a ^ 0xFF
                 elif op == 0x37:
@@ -465,7 +500,17 @@ class CPU:
                 self.bus.write(self.sp + 1, self.pc >> 8)
                 self.pc = t
                 return
-            if op == 0xC9 or (lo == 1 and (op & 8)):    # RET
+            # E9 (PCHL) and F9 (SPHL) share lo==1 with the RET pair and MUST
+            # be dispatched first.  A pattern match that swallowed them ran
+            # PCHL and SPHL as RET -- undetected until the real monitor's
+            # prompt loop did SPHL, popped garbage, and "jumped" into RAM.
+            if op == 0xE9:                              # PCHL
+                self.pc = self.hl()
+                return
+            if op == 0xF9:                              # SPHL
+                self.sp = self.hl()
+                return
+            if op in (0xC9, 0xD9):                      # RET (+ undocumented)
                 self.pc = self.bus.read(self.sp) | (self.bus.read(self.sp + 1) << 8)
                 self.sp = (self.sp + 2) & 0xFFFF
                 return
@@ -517,13 +562,7 @@ class CPU:
                 self.bus.write(self.sp + 1, self.r["H"])
                 self.r["L"], self.r["H"] = lo, hi
                 return
-            if op == 0xF9:                       # SPHL
-                self.sp = self.hl()
-                return
             if op in (0xF3, 0xFB):
-                return
-            if op == 0xE9:
-                self.pc = self.hl()
                 return
         raise NotImplementedError(f"opcode {op:02X} at {self.pc - 1:04X}")
 
