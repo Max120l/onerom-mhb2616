@@ -483,6 +483,15 @@ loads but its entry is not the header field, which holds text.
 PISQORKY and HLIPA stall on their readers' framing.
 `tools/ptp_lib.py` carries the container format.
 
+When a larger corpus arrives, `tools/shelf_factory.py` auditions it
+wholesale: every plain one-block program in a pile of ptps or zips is
+booted in the -2 environment (manufactured via the real FFF0h
+relocation) and then natively, nudged with a few keypresses, and
+judged by whether it draws.  Passers come out as screenshots plus
+ready-to-paste manifest entries; everything else is listed with its
+reason, because a shelf that silently drops games reads as "checked
+everything" when it did not.
+
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire
 means silence) does not apply. The wiring is proven before multiload
