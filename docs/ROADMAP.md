@@ -145,12 +145,21 @@ being the customer) and **tape entries** (`.ptp` programs shelved by
 name; the -2-environment ones boot through FFF0h). Host-tested through
 the real ROM end to end -- menu key to Willy's title screen.
 
-Remaining, in rising ambition: turbo-loader tape extraction (three
-games land byte-complete but their entry state is not yet right; two
-stall on reader framing -- docs/ROM-module.md carries the full state of
-knowledge); composite pages (a BASIC plus the module software it
-loads, e.g. `wurmi`/`kli2`, which have no boot stub of their own); more
-than 16 entries.
+The turbo-loader wall then fell to the PCHL/SPHL emulator fix: the
+factory rips loaders against real monitor images, captures the handoff
+register file, and cold-verifies each extraction exactly as the shelf
+boots it.  Census over the Infoserver collections (90 tape programs):
+**34 verified** -- ARKANOID, BOULDER DASH, FLAPPY 2000, ATOMIX,
+KUBANOID, both Jet Set Willy ports, the M-TRON trilogy, BLUDISTE,
+PEXESO and the games-1 arcade set among them -- shipped as four shelf
+volumes, every volume's lead game boot-tested through the full chain.
+
+Remaining, in rising ambition: the sixteen hold-out turbo loaders
+(JETPAC, VLAK, TETRIS+4, the MANIC family -- their readers stall on
+framing the leader-restored and keypress-nudged variants do not fix);
+composite pages (a BASIC plus the module software it loads, e.g.
+`wurmi`/`kli2`, which have no boot stub of their own); more than 16
+entries per menu.
 
 ## Parked
 

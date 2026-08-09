@@ -96,9 +96,11 @@ PAGE_CHUNK = 0x3FC0              # payload ceiling per page (hotspots above)
 REPLAY_SP = 0xE000
 
 # EC00h transfers count+1 bytes: the loop pre-increments the count's high
-# byte and tests only that byte (docs/ROM-module.md).
+# byte and tests only that byte (docs/ROM-module.md).  A single transfer may
+# span a full page's payload region -- its top is PAGE_CHUNK, above which
+# the hotspots live and a sequential read must never wander.
 def ec_count(n: int) -> int:
-    assert 1 <= n <= 0x3FA0
+    assert 1 <= n <= PAGE_CHUNK
     return n - 1
 
 # The delay between touching a hotspot and trusting the window again.
