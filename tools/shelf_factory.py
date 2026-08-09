@@ -35,6 +35,127 @@ from i8080emu import Bus, CPU
 STEPS_SETTLE = 2_500_000
 NUDGES = [("SPACE", 0, 16), ("EOL", 14, 16), ("1", 0, 2)]
 LIT_PASS = 300                  # drawn bytes that count as "it runs"
+SENTINEL = 0xAA
+
+
+class TapeBus(Bus):
+    """The extraction rig: a byte-level USART at 1Ch/1Dh (mask FDh, so the
+    1E/1F aliases too), and 8000-8FFFh write-protected -- it is ROM on the
+    machines these loaders were written for, and at least one of them
+    writes there and reads the result back as its machine sniff."""
+
+    def __init__(self, tape=b'', **kw):
+        super().__init__(**kw)
+        self.tape = list(tape)
+
+    def write(self, a, v):
+        if 0x8000 <= (a & 0xFFFF) <= 0x8FFF:
+            self.clock += 1
+            return
+        super().write(a, v)
+
+    def inp(self, port):
+        if (port & 0xFD) == 0x1C:
+            self.clock += 1
+            return self.tape.pop(0) if self.tape else 0
+        if (port & 0xFD) == 0x1D:
+            self.clock += 1
+            return 0x05 | (0x02 if self.tape else 0)
+        return super().inp(port)
+
+
+def rip_turbo(prog: dict, monitors: list):
+    """Run a turbo loader against real monitor images until one carries it
+    to handoff.  -> (image, load, exec, regs, monitor_name) or (None, why).
+
+    The loaders sniff their machine (LDA 8000h / CPI C3h -- monit1 begins
+    with C3h, the -2 monitors with 31h) and then read raw blocks through
+    that monitor's tape routines, so the monitor must be the one the
+    loader was written against; trying them in order lets the loader
+    itself tell us which.
+    """
+    start, body = prog['start'], bytes(prog['body'])
+    plain = b''.join(prog['raws'])
+    # Some loaders read raw byte streams; others call the monitor's
+    # header-hunting reader and need each block's 48-byte pilot leader,
+    # which the ptp container strips.  Some show "press key" mid-load.
+    # Variants ordered cheapest-assumption-first; the first to reach
+    # handoff wins, so a rip that already worked keeps working.
+    leadered = b''.join(ptp_lib.LEADER + r for r in prog['raws'])
+    variants = [(plain, False), (plain, True),
+                (leadered, False), (leadered, True)]
+    last = 'never ran'
+    for mon_name, mon in monitors:
+        for stream, nudge in variants:
+            for dreg in (0xFF, 0x00):
+                bus = TapeBus(tape=stream, rom=bytes(0x2000))
+                bus.startup_map = False
+                bus.rom_visible = False
+                for a in range(0x8000):
+                    bus.ram[a] = SENTINEL
+                bus.ram[0x8000:0x8000 + len(mon)] = mon
+                cpu = CPU(bus)
+                bus.ram[start:start + len(body)] = body
+                cpu.sp = 0xBFF0
+                cpu.pc = start
+                cpu.r['D'] = dreg
+                cpu.z, cpu.cy = True, False
+                lo, hi = start, start + len(body)
+                for step in range(12_000_000):
+                    pc = cpu.pc
+                    if not bus.tape and pc < 0x8000 \
+                            and not (lo <= pc < hi):
+                        snap = bytes(bus.ram[:0x8000])
+                        marks = [i for i, v in enumerate(snap)
+                                 if v != SENTINEL]
+                        a0, b0 = marks[0], marks[-1] + 1
+                        img = bytes(0 if snap[i] == SENTINEL else snap[i]
+                                    for i in range(a0, b0))
+                        regs = {k: cpu.r[k] for k in 'ABCDEHL'}
+                        regs['SP'] = cpu.sp
+                        return (img, a0, pc, regs, mon_name), None
+                    if cpu.halted:
+                        last = f'{mon_name}: HALT at {pc:04X}'
+                        break
+                    if nudge and step % 1_500_000 == 0 and step:
+                        bus.press(0, 16)       # SPACE
+                        bus.press(14, 16)      # EOL
+                    elif nudge and step % 1_500_000 == 750_000:
+                        bus.release_all()
+                    cpu.step()
+                else:
+                    last = (f'{mon_name}: cap at {cpu.pc:04X}, '
+                            f'{len(bus.tape)} tape bytes left')
+    return None, last
+
+
+def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
+                monit3: bytes):
+    """Boot the extracted image the way the SHELF will: fresh -2
+    environment, stage-2-style register init, cold jump.  A PASS here is a
+    game the stage-2 loader can genuinely start."""
+    bus, cpu = compat_machine(monit3)
+    bus.ram[load:load + len(image)] = image
+    for k in 'ABCDEHL':
+        cpu.r[k] = regs[k]
+    cpu.sp = regs['SP']
+    cpu.pc = exec_
+    try:
+        for _ in range(STEPS_SETTLE):
+            cpu.step()
+            if cpu.halted:
+                return 'halted', lit_bytes(bus), bus
+        for _, col, mask in NUDGES:
+            bus.press(col, mask)
+            for _ in range(400_000):
+                cpu.step()
+            bus.release_all()
+            for _ in range(400_000):
+                cpu.step()
+    except NotImplementedError as e:
+        return f'emulator: {e}', lit_bytes(bus), bus
+    lit = lit_bytes(bus)
+    return ('PASS' if lit >= LIT_PASS else f'no draw ({lit} lit)'), lit, bus
 
 
 def compat_machine(monit3: bytes):
@@ -132,6 +253,62 @@ def gather_ptps(paths):
     return out
 
 
+_POOL = {}
+
+
+def _pool_init(monit3, monitors, out):
+    _POOL['monit3'] = monit3
+    _POOL['monitors'] = monitors
+    _POOL['out'] = Path(out)
+
+
+def _audition_one(job):
+    """One program, start to verdict.  Runs in a worker; writes its own
+    screenshot and extracted binary, returns the report row."""
+    name, src, prog = job
+    monit3, monitors = _POOL['monit3'], _POOL['monitors']
+    out = _POOL['out']
+    tag = ''.join(ch if ch.isalnum() else '_' for ch in name)
+    if prog['raws']:
+        if not monitors:
+            return name, src, 'turbo loader (no --monitors-dir)', None
+        got, why = rip_turbo(prog, monitors)
+        if got is None:
+            return name, src, f'turbo rip failed: {why}', None
+        image, load, exec_, regs, mon_name = got
+        verdict, lit, bus = verify_cold(image, load, exec_, regs, monit3)
+        if bus is not None:
+            screenshot(bus, out / "shots" / f"{tag}.png")
+        if verdict != 'PASS':
+            return name, src, (f'turbo rip ok via {mon_name} but cold '
+                               f'boot: {verdict}'), None
+        (out / "verified" / f"{tag}.bin").write_bytes(image)
+        ent = {"type": "binary", "name": name[:20],
+               "file": f"verified/{tag}.bin",
+               "load": f"0x{load:04X}", "exec": f"0x{exec_:04X}",
+               "mode": "v2",
+               "regs": {k.lower(): f"0x{regs[k]:02X}" for k in 'ABCDEHL'}
+               | {"sp": f"0x{regs['SP']:04X}"}}
+        return name, src, (f'PASS (turbo via {mon_name}, {lit} lit, '
+                           f'{len(image)} B at {load:04X}, '
+                           f'exec {exec_:04X})'), ent
+    if not prog['body']:
+        return name, src, 'no body block', None
+    verdict = '?'
+    for env in ('v2', 'v3'):
+        verdict, lit, bus = audition(prog, monit3, env)
+        if verdict == 'PASS':
+            if bus is not None:
+                screenshot(bus, out / "shots" / f"{tag}.png")
+            ent = {"type": "tape", "name": name[:20],
+                   "file": src.split(':')[-1], "program": prog['name'],
+                   "exec": f"0x{prog['start']:04X}"}
+            if env == 'v2':
+                ent["mode"] = "v2"
+            return name, src, f'PASS ({env}, {lit} lit)', ent
+    return name, src, f'FAIL both envs: {verdict}', None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -139,16 +316,27 @@ def main() -> int:
                     help=".ptp files, zips of them, or directories of either")
     ap.add_argument("--monitor3", type=Path, required=True,
                     help="monit3B.rom (8 KB), for both environments")
+    ap.add_argument("--monitors-dir", type=Path,
+                    help="directory with monit2A/monit2/monit2B/monit1 "
+                         ".rom files; enables turbo-loader extraction")
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
 
     monit3 = args.monitor3.read_bytes()
+    monitors = []
+    if args.monitors_dir:
+        for n in ("monit1", "monit2A", "monit2", "monit2B"):
+            hits = list(args.monitors_dir.rglob(f"{n}.rom"))
+            if hits:
+                monitors.append((n, hits[0].read_bytes()))
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / "shots").mkdir(exist_ok=True)
+    (args.out / "verified").mkdir(exist_ok=True)
     report, manifest = [], []
     seen = set()
 
     import tempfile, os
+    jobs = []
     for src, data in gather_ptps(args.tapes):
         tmp = Path(tempfile.mkstemp(suffix='.ptp')[1])
         tmp.write_bytes(data)
@@ -162,28 +350,17 @@ def main() -> int:
             if key in seen:
                 continue
             seen.add(key)
-            if prog['raws']:
-                report.append((name, src, 'turbo loader: not extractable yet'))
-                continue
-            if not prog['body']:
-                report.append((name, src, 'no body block'))
-                continue
-            for env in ('v2', 'v3'):
-                verdict, lit, bus = audition(prog, monit3, env)
-                if verdict == 'PASS':
-                    tag = ''.join(ch if ch.isalnum() else '_' for ch in name)
-                    if bus is not None:
-                        screenshot(bus, args.out / "shots" / f"{tag}.png")
-                    report.append((name, src, f'PASS ({env}, {lit} lit)'))
-                    ent = {"type": "tape", "name": name[:20],
-                           "file": src.split(':')[-1], "program": prog['name'],
-                           "exec": f"0x{prog['start']:04X}"}
-                    if env == 'v2':
-                        ent["mode"] = "v2"
-                    manifest.append(ent)
-                    break
-            else:
-                report.append((name, src, f'FAIL both envs: {verdict}'))
+            jobs.append((name, src, prog))
+
+    import multiprocessing as mp
+    with mp.Pool(min(mp.cpu_count(), 8), _pool_init,
+                 (monit3, monitors, str(args.out))) as pool:
+        for name, src, verdict, ent in pool.imap_unordered(_audition_one,
+                                                           jobs):
+            print(f"  {name:10s} {verdict}", flush=True)
+            report.append((name, src, verdict))
+            if ent:
+                manifest.append(ent)
 
     lines = ["# Shelf audition", ""]
     for name, src, verdict in report:

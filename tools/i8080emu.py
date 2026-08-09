@@ -534,8 +534,8 @@ class CPU:
                                | (self.bus.read(self.sp + 1) << 8))
                     self.sp = (self.sp + 2) & 0xFFFF
                 return
-            if op == 0xC3:
-                self.pc = self.fetch16()
+            if op in (0xC3, 0xCB):     # JMP (CB: the undocumented alias,
+                self.pc = self.fetch16()   # and real software uses it)
                 return
             if lo == 2:                                 # Jcc
                 a = self.fetch16()

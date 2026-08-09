@@ -420,11 +420,15 @@ def emit_hotspot_touch(a: MAsm) -> None:
     a.ret()
 
 
-def build_stage2(chunks: list, exec_: int, v2: bool) -> bytes:
+def build_stage2(chunks: list, exec_: int, v2: bool,
+                 regs: dict | None = None) -> bytes:
     """The chunk loader for a multi-page cartridge: for each (page, src,
-    count, dest), page in and block-read; then stack up and jump.  Runs at
-    STAGE2_ORG, calls the monitor's reader at its generation's address --
-    which is the only difference v2 makes here."""
+    count, dest), page in and block-read; then set up the machine state the
+    program expects and jump.  Runs at STAGE2_ORG, calls the monitor's
+    reader at its generation's address -- which is the only difference v2
+    makes here.  `regs` recreates a tape loader's handoff state for
+    programs extracted mid-flight; without it the entry gets the plain
+    cold-boot state every directly-authored cartridge uses."""
     routine = EC00_V2 if v2 else EC00
     a = MAsm(STAGE2_ORG)
     cur = None
@@ -436,7 +440,14 @@ def build_stage2(chunks: list, exec_: int, v2: bool) -> bytes:
         a.call(routine)
         a.db(src & 0xFF, src >> 8, count & 0xFF, count >> 8,
              dest & 0xFF, dest >> 8)
-    a.lxi(RP_SP, 0xBFF0)             # the state the verified cold entry used
+    if regs:
+        a.lxi(RP_B, (regs['b'] << 8) | regs['c'])
+        a.lxi(RP_D, (regs['d'] << 8) | regs['e'])
+        a.lxi(RP_H, (regs['h'] << 8) | regs['l'])
+        a.mvi(A, regs['a'])
+        a.lxi(RP_SP, regs['sp'])
+    else:
+        a.lxi(RP_SP, 0xBFF0)         # the state the verified cold entry used
     a.jmp(exec_)
     emit_hotspot_touch(a)
     out = a.link()
@@ -447,7 +458,8 @@ def build_stage2(chunks: list, exec_: int, v2: bool) -> bytes:
 
 
 def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
-                     first_page: int, v2: bool) -> list:
+                     first_page: int, v2: bool,
+                     regs: dict | None = None) -> list:
     """Pages for a binary too big for one page.  Page 1: stub + stage-2 +
     first chunk; continuation pages: raw chunks from offset 0."""
     if load + len(payload) > 0xC000:
@@ -467,7 +479,7 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
         page += 1
         src0 = 0
     stage2 = build_stage2([(p, s, c, d) for p, s, c, d, _, _ in chunks],
-                          exec_, v2)
+                          exec_, v2, regs)
     sig = 0xCD if v2 else 0xCC
     stub = bytearray(boot_stub(PAYLOAD_BASE, ec_count(len(stage2)),
                                STAGE2_ORG, STAGE2_ORG))
@@ -534,9 +546,15 @@ def build_pages(entries: list, root: Path) -> tuple:
                 load = int(ent["load"], 0)
                 exec_ = int(ent.get("exec", ent["load"]), 0)
             what = ent.get("program", ent.get("file", name))
-            if PAYLOAD_BASE + len(payload) > HOTSPOT_MODULE_ADDR:
+            regs = None
+            if "regs" in ent:
+                regs = {k: int(v, 0) for k, v in ent["regs"].items()}
+            if regs is not None or \
+                    PAYLOAD_BASE + len(payload) > HOTSPOT_MODULE_ADDR:
+                # Register state needs the stage-2 loader, so a small
+                # program with regs takes the multi-page route too.
                 pages.extend(multipage_binary(payload, load, exec_, what,
-                                              page_no, v2))
+                                              page_no, v2, regs))
             else:
                 pages.append(page_from_binary(payload, load, exec_, what,
                                               v2=v2))
