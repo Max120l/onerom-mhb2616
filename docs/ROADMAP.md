@@ -148,18 +148,38 @@ the real ROM end to end -- menu key to Willy's title screen.
 The turbo-loader wall then fell to the PCHL/SPHL emulator fix: the
 factory rips loaders against real monitor images, captures the handoff
 register file, and cold-verifies each extraction exactly as the shelf
-boots it.  Census over the Infoserver collections (90 tape programs):
-**34 verified** -- ARKANOID, BOULDER DASH, FLAPPY 2000, ATOMIX,
-KUBANOID, both Jet Set Willy ports, the M-TRON trilogy, BLUDISTE,
-PEXESO and the games-1 arcade set among them -- shipped as four shelf
-volumes, every volume's lead game boot-tested through the full chain.
+boots it.
 
-Remaining, in rising ambition: the sixteen hold-out turbo loaders
-(JETPAC, VLAK, TETRIS+4, the MANIC family -- their readers stall on
-framing the leader-restored and keypress-nudged variants do not fix);
-composite pages (a BASIC plus the module software it loads, e.g.
-`wurmi`/`kli2`, which have no boot stub of their own); more than 16
-entries per menu.
+The first shipped census (34 of 90) then met real hardware, and
+hardware found what the host checks had missed: the rig's sentinel
+prefill (0xAA) could not tell "never written" from "the loader wrote
+0xAA", and shipped every such byte as 0x00 -- 479 corrupted bytes
+across 18 games, crashing MAGICIAN's start key, mangling ARKANOID's
+and Jet Set Willy's sprites, deafening BOULDER DASH's keyboard
+handler.  A write bitmap replaced the sentinel, the verifier learned
+to watch for HLT while pressing its nudge keys (the gap the crash had
+walked through), and the re-audition came back **39 verified of 90**,
+nothing lost -- five former "holdouts" (KVADRO, KVADRO.E, MANIC+,
+PEXESO, TVARE) had been corruption victims all along.  Shipped as four
+shelf volumes, lead games and the bug's whole cast boot-tested through
+the full chain including the start key.  Both factory lessons are
+written up in docs/ROM-module.md.
+
+A fifth volume carries the diagnostics: shelf editions of the screen
+test card (twice, marching complementary ranges 2000-BFFF and
+0000-9FFF, since a RAM-resident march cannot cover its own feet) and
+the module scanner (hotspot-swaps the window to the BASIC page, grades
+it live; block F stops short of the live hotspot bytes).  Confirmed on
+hardware the day it was built.  The beacon RAM test and the CPU ladder
+stay monitor-socket images by design -- they exist for machines too
+broken to reach a menu.
+
+Remaining, in rising ambition: the ~30 hold-out turbo loaders
+(JETPAC, VLAK, PSSST, TETRIS+4, the MANIC two-part family among them
+-- their readers stall on framing that the leader-restored and
+keypress-nudged variants do not fix); composite pages (a BASIC plus
+the module software it loads, e.g. `wurmi`/`kli2`, which have no boot
+stub of their own); more than 16 entries per menu.
 
 ## Parked
 

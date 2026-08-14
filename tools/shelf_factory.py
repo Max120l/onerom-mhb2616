@@ -42,16 +42,26 @@ class TapeBus(Bus):
     """The extraction rig: a byte-level USART at 1Ch/1Dh (mask FDh, so the
     1E/1F aliases too), and 8000-8FFFh write-protected -- it is ROM on the
     machines these loaders were written for, and at least one of them
-    writes there and reads the result back as its machine sniff."""
+    writes there and reads the result back as its machine sniff.
+
+    Every write below 8000h is recorded in a bitmap.  The bitmap, not a
+    sentinel value, decides what the extraction ships: a sentinel cannot
+    tell "never written" from "the loader wrote the sentinel's own value",
+    and 0xAA is an everyday byte in sprite data -- MAGICIAN shipped with
+    21 of its bytes silently zeroed that way, one of them an opcode."""
 
     def __init__(self, tape=b'', **kw):
         super().__init__(**kw)
         self.tape = list(tape)
+        self.wrote = bytearray(0x8000)
 
     def write(self, a, v):
-        if 0x8000 <= (a & 0xFFFF) <= 0x8FFF:
+        a &= 0xFFFF
+        if 0x8000 <= a <= 0x8FFF:
             self.clock += 1
             return
+        if a < 0x8000:
+            self.wrote[a] = 1
         super().write(a, v)
 
     def inp(self, port):
@@ -100,16 +110,20 @@ def rip_turbo(prog: dict, monitors: list):
                 cpu.pc = start
                 cpu.r['D'] = dreg
                 cpu.z, cpu.cy = True, False
+                # the loader body is content too: games reuse its bytes
+                # as scratch or data, so it ships with the image (clamped:
+                # some bodies run right up to the 8000h monitor boundary)
+                bend = min(start + len(body), 0x8000)
+                bus.wrote[start:bend] = b'\x01' * (bend - start)
                 lo, hi = start, start + len(body)
                 for step in range(12_000_000):
                     pc = cpu.pc
                     if not bus.tape and pc < 0x8000 \
                             and not (lo <= pc < hi):
                         snap = bytes(bus.ram[:0x8000])
-                        marks = [i for i, v in enumerate(snap)
-                                 if v != SENTINEL]
+                        marks = [i for i, w in enumerate(bus.wrote) if w]
                         a0, b0 = marks[0], marks[-1] + 1
-                        img = bytes(0 if snap[i] == SENTINEL else snap[i]
+                        img = bytes(snap[i] if bus.wrote[i] else 0
                                     for i in range(a0, b0))
                         regs = {k: cpu.r[k] for k in 'ABCDEHL'}
                         regs['SP'] = cpu.sp
@@ -145,13 +159,19 @@ def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
             cpu.step()
             if cpu.halted:
                 return 'halted', lit_bytes(bus), bus
-        for _, col, mask in NUDGES:
+        # a HLT on a keypress is how MAGICIAN's corruption slipped
+        # through: the title drew, the crash waited for the start key
+        for key, col, mask in NUDGES:
             bus.press(col, mask)
             for _ in range(400_000):
                 cpu.step()
+                if cpu.halted:
+                    return f'halted on {key}', lit_bytes(bus), bus
             bus.release_all()
             for _ in range(400_000):
                 cpu.step()
+                if cpu.halted:
+                    return f'halted after {key}', lit_bytes(bus), bus
     except NotImplementedError as e:
         return f'emulator: {e}', lit_bytes(bus), bus
     lit = lit_bytes(bus)
@@ -220,13 +240,17 @@ def audition(prog: dict, monit3: bytes, env: str):
             cpu.step()
             if cpu.halted:
                 return 'halted', lit_bytes(bus), bus
-        for _, col, mask in NUDGES:
+        for key, col, mask in NUDGES:
             bus.press(col, mask)
             for _ in range(400_000):
                 cpu.step()
+                if cpu.halted:
+                    return f'halted on {key}', lit_bytes(bus), bus
             bus.release_all()
             for _ in range(400_000):
                 cpu.step()
+                if cpu.halted:
+                    return f'halted after {key}', lit_bytes(bus), bus
     except NotImplementedError as e:
         return f'emulator: {e}', lit_bytes(bus), bus
     lit = lit_bytes(bus)

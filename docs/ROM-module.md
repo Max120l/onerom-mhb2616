@@ -492,6 +492,18 @@ ready-to-paste manifest entries; everything else is listed with its
 reason, because a shelf that silently drops games reads as "checked
 everything" when it did not.
 
+Two lessons the factory learned from hardware, both found by MAGICIAN
+crashing on its start key after passing every host check.  First: what
+a turbo loader wrote must be tracked with a **write bitmap**, not a
+sentinel prefill — a byte still reading `AAh` at handoff might be
+untouched RAM or might be sprite data the loader legitimately wrote,
+and the first rig shipped both as `00h`, silently corrupting every
+extraction that contained the sentinel's own value (MAGICIAN lost 21
+bytes, one of them an opcode).  Second: the cold-boot verifier must
+watch for HLT **while it presses its nudge keys**, not only during the
+settle — a title screen that draws proves the intro runs, and says
+nothing about the code behind the start key.
+
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire
 means silence) does not apply. The wiring is proven before multiload

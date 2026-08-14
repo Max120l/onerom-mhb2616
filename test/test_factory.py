@@ -60,6 +60,45 @@ def spinning_program() -> bytes:
     return a.link()
 
 
+def test_turbo_rip_preserves_sentinel_valued_bytes():
+    """The extraction must ship a loader-written 0xAA byte as 0xAA.
+
+    The rig prefills RAM with 0xAA to find the image extent; the first
+    version also *shipped* every byte still reading 0xAA as 0x00 -- so any
+    game whose data legitimately contained 0xAA was silently corrupted
+    (MAGICIAN crashed on its start key from a zeroed opcode).  The write
+    bitmap decides now; this pins that.
+    """
+    import shelf_factory as sf
+
+    # a turbo-shaped loader: pull every tape byte to 4000h, jump there
+    a = ml.MAsm(0x7F00)
+    payload = bytes([0x76, 0xAA, 0x00, 0xAA, 0x55, 0xAA]) + bytes(10) \
+        + bytes([0xAA])
+    a.lxi(ml.RP_H, 0x4000)
+    a.lxi(ml.RP_B, len(payload))
+    a.label("rd")
+    a.inp(0x1C)
+    a.mov(ml.M, ml.A)
+    a.inx(ml.RP_H)
+    a.dcx(ml.RP_B)
+    a.mov(ml.A, ml.B)
+    a.ora(ml.C)
+    a.jnz("rd")
+    a.jmp(0x4000)
+    body = a.link()
+
+    prog = {"start": 0x7F00, "body": body, "raws": [payload]}
+    got, why = sf.rip_turbo(prog, [("fake", bytes(0x1000))])
+    assert got is not None, why
+    image, load, exec_, regs, mon = got
+    assert load == 0x4000 and exec_ == 0x4000
+    assert image[:len(payload)] == payload, \
+        "0xAA bytes in loaded data must survive extraction"
+    # the unwritten gap between payload and loader body ships as zeros
+    assert set(image[len(payload):0x7F00 - load]) == {0}
+
+
 def test_factory_verdicts(tmp_path):
     import pytest
     if not MONIT3B.exists():
