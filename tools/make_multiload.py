@@ -71,9 +71,12 @@ def tape_block(path, program):
     return bytes(p['body']), p['start']
 
 PAGE = 16384
-HOTSPOT_MODULE_ADDR = 0x3FE0     # module address of hotspot 0; +n names page n
-MAX_PAGES = 32
+HOTSPOT_MODULE_ADDR = 0x3FE0     # commit hotspot 0; +n names page bank*32+n
+BANKSEL_MODULE_ADDR = 0x3FD8     # bank latch; +j latches bank j (no rebuild)
+MAX_PAGES = 256                  # 8 banks x 32 commit hotspots
 MAX_ENTRIES = 16
+BANK_DELAY_ITERS = 0x800         # ~24 ms: outlives core 0's 5 ms poll, so
+                                 # the bank touch is consumed before commit
 PAYLOAD_BASE = 0x0040            # payload starts here in a stub-led page
 
 MENU_ORG = 0xB000                # where the menu runs
@@ -217,7 +220,7 @@ def emit_strip_calls(a: MAsm, placed: list) -> None:
 # ---------------------------------------------------------------------------
 # The menu program
 # ---------------------------------------------------------------------------
-def build_menu(entries: list) -> bytes:
+def build_menu(entries: list, title: str = "ONE ROM MULTILOAD") -> bytes:
     """entries: dicts with name (str) and page (int), in menu order."""
     a = MAsm(MENU_ORG)
     strips = []                       # (label, line, col, width, data)
@@ -226,7 +229,7 @@ def build_menu(entries: list) -> bytes:
         data = strip(text)
         strips.append((f"s_{tag}", line, col, len(text), data))
 
-    add_strip("title", LN_TITLE, TEXT_COL, "ONE ROM MULTILOAD")
+    add_strip("title", LN_TITLE, TEXT_COL, title)
     for i, ent in enumerate(entries):
         cap = f"{KEYS[i][0]} {ent['name']}"
         add_strip(f"e{i}", LN_ENTRY0 + ENTRY_STEP * i, TEXT_COL, cap)
@@ -267,21 +270,33 @@ def build_menu(entries: list) -> bytes:
     for i, ent in enumerate(entries):
         a.label(f"sel_{i}")
         a.mvi(D, 1 if ent.get("v2") else 0)
-        a.mvi(A, ent["page"])
+        a.mvi(L, 0xD8 | (ent["page"] >> 5))      # bank-latch low byte
+        a.mvi(E, 0xE0 | (ent["page"] & 0x1F))    # commit low byte
         a.jmp("boot")
 
-    # boot: A = page, D = generation.  Touch the hotspot, sit out the
-    # board's rebuild, then boot the new page the way its machine expects.
+    # boot: L = bank touch, E = commit touch, D = generation.  Latch the
+    # bank, give core 0 a poll interval to consume it, commit, sit out the
+    # rebuild, then boot the new page the way its machine expects.
     a.label("boot")
     a.lxi(RP_SP, REPLAY_SP)           # stack out of every cartridge's way
-    a.adi(0xE0)                       # hotspot low byte; page <= 31, no carry
-    a.mov(E, A)
     a.mvi(A, 0x90)                    # module 8255: A in, B/C out.  Clears
     a.out(0xFB)                       # the latches -- a glitch read of module
-    a.mov(A, E)                       # 0x0000, which is nobody's hotspot.
+    a.mov(A, L)                       # 0x0000, which is nobody's hotspot.
     a.out(0xF9)
     a.mvi(A, HOTSPOT_MODULE_ADDR >> 8)
-    a.out(0xFA)                       # strobe live on the hotspot address
+    a.out(0xFA)                       # strobe live on the bank address
+    a.mvi(A, 0xFF)
+    a.out(0xFA)                       # park
+    a.lxi(RP_B, BANK_DELAY_ITERS)
+    a.label("bdly")
+    a.dcx(RP_B)
+    a.mov(A, B)
+    a.ora(C)
+    a.jnz("bdly")
+    a.mov(A, E)
+    a.out(0xF9)
+    a.mvi(A, HOTSPOT_MODULE_ADDR >> 8)
+    a.out(0xFA)                       # strobe live on the commit address
     a.mvi(A, 0xFF)
     a.out(0xFA)                       # park
     a.lxi(RP_B, DELAY_ITERS)
@@ -304,7 +319,8 @@ def build_menu(entries: list) -> bytes:
     # -- but a wrong page must not strand the machine: go home to the menu
     # by booting page 0 through the very same path.
     a.mvi(D, 0)
-    a.mvi(A, 0)
+    a.mvi(L, 0xD8)
+    a.mvi(E, 0xE0)
     a.jmp("boot")
     a.label("boot_v2")
     a.jmp(0xFFF0)
@@ -368,10 +384,10 @@ def pad_page(data: bytes) -> bytes:
 
 
 def check_hotspot_clear(data: bytes, what: str) -> None:
-    tail = data[HOTSPOT_MODULE_ADDR:]
+    tail = data[BANKSEL_MODULE_ADDR:]
     if tail and any(x not in (0x00, 0xFF) for x in tail):
         raise SystemExit(f"error: {what} carries data in the hotspot region "
-                         f"(module 0x3FE0-0x3FFF); those 32 bytes are page-"
+                         f"(module 0x3FD8-0x3FFF); those bytes are page-"
                          f"select registers on every page and cannot hold "
                          f"payload")
 
@@ -400,13 +416,25 @@ def page_from_rmm(data: bytes, name: str, v2: bool = False) -> bytes:
 
 
 def emit_hotspot_touch(a: MAsm) -> None:
-    """A = page: touch its hotspot and sit out the board's rebuild.
-    Same dance as the menu's, as a callable for the stage-2 loader."""
+    """D = bank-latch low byte, A = commit low byte: two-touch a page and
+    sit out the board's rebuild.  Same dance as the menu's, as a callable
+    for the stage-2 loader."""
     a.label("hs_touch")
-    a.adi(0xE0)
     a.mov(E, A)
     a.mvi(A, 0x90)
     a.out(0xFB)
+    a.mov(A, D)
+    a.out(0xF9)
+    a.mvi(A, HOTSPOT_MODULE_ADDR >> 8)
+    a.out(0xFA)
+    a.mvi(A, 0xFF)
+    a.out(0xFA)
+    a.lxi(RP_B, BANK_DELAY_ITERS)
+    a.label("hs_bdly")
+    a.dcx(RP_B)
+    a.mov(A, B)
+    a.ora(C)
+    a.jnz("hs_bdly")
     a.mov(A, E)
     a.out(0xF9)
     a.mvi(A, HOTSPOT_MODULE_ADDR >> 8)
@@ -483,7 +511,8 @@ def build_stage2(chunks: list, exec_: int, v2: bool,
     cur = None
     for page, src, count, dest in chunks:
         if page != cur:
-            a.mvi(A, page)
+            a.mvi(D, 0xD8 | (page >> 5))
+            a.mvi(A, 0xE0 | (page & 0x1F))
             a.call("hs_touch")
             cur = page
         a.call(routine)
@@ -592,16 +621,16 @@ def page_from_binary(payload: bytes, load: int, exec_: int, name: str,
 
 
 def build_pages(entries: list, root: Path) -> tuple:
-    """-> (pages, menu_entries).  Page 0 is filled in by the caller once the
-    menu exists; a placeholder holds its slot."""
+    """-> (pages, menu_entries).  Menu slots (page 0 and any "dir" entry's
+    submenu page) are reserved first and filled once their entry pages
+    exist -- a submenu is just another menu page whose entries happen to
+    be games, plus a BACK entry pointing at its parent."""
     if not entries:
         raise SystemExit("error: empty manifest")
-    if len(entries) > MAX_ENTRIES:
-        raise SystemExit(f"error: {len(entries)} entries; the menu's key row "
-                         f"holds {MAX_ENTRIES}")
     pages = [None]
-    menu_entries = []
-    for ent in entries:
+
+    def emit_program(ent):
+        """One non-dir entry -> its pages appended; returns (page_no, v2)."""
         name = ent["name"].upper()
         page_no = len(pages)
         kind = ent.get("type", "rmm")
@@ -657,14 +686,37 @@ def build_pages(entries: list, root: Path) -> tuple:
             pages.append(page_from_binary(payload, load, exec_, "demo"))
         else:
             raise SystemExit(f"error: unknown entry type {kind!r}")
-        menu_entries.append({"name": name, "page": page_no, "v2": v2})
+        return page_no, v2
+
+    def build_level(ents, slot, title, parent):
+        room = MAX_ENTRIES - (1 if parent is not None else 0)
+        if len(ents) > room:
+            raise SystemExit(f"error: {title!r} holds {len(ents)} entries; "
+                             f"the menu's key row fits {room} here")
+        menu_ents = []
+        for ent in ents:
+            if ent.get("type") == "dir":
+                sub = len(pages)
+                pages.append(None)          # reserve the submenu's slot
+                menu_ents.append({"name": ent["name"].upper(), "page": sub,
+                                  "v2": False})
+                build_level(ent["entries"], sub, ent["name"].upper(), slot)
+            else:
+                page_no, v2 = emit_program(ent)
+                menu_ents.append({"name": ent["name"].upper(),
+                                  "page": page_no, "v2": v2})
+        if parent is not None:
+            menu_ents.append({"name": "BACK", "page": parent, "v2": False})
+        menu = build_menu(menu_ents, title)
+        stub = boot_stub(PAYLOAD_BASE, ec_count(len(menu)), MENU_ORG,
+                         MENU_ORG)
+        pages[slot] = pad_page(stub + bytes(PAYLOAD_BASE - len(stub)) + menu)
+        return menu_ents
+
+    menu_entries = build_level(entries, 0, "ONE ROM MULTILOAD", None)
     if len(pages) > MAX_PAGES:
         raise SystemExit(f"error: {len(pages)} pages; hotspot addressing "
                          f"reaches {MAX_PAGES}")
-
-    menu = build_menu(menu_entries)
-    stub = boot_stub(PAYLOAD_BASE, ec_count(len(menu)), MENU_ORG, MENU_ORG)
-    pages[0] = pad_page(stub + bytes(PAYLOAD_BASE - len(stub)) + menu)
     return pages, menu_entries
 
 

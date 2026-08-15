@@ -158,12 +158,13 @@ def emit_subroutines(a: Asm, hextab: int) -> None:
 
 
 def emit_scan15(a: Asm) -> None:
-    # -- scan15: block 15 for the shelf edition -- 3C00h to 3FDFh only.
-    # On multiload firmware the window's last 32 bytes are live hotspots:
-    # reading 3FE0h+n switches the module to page n, so a full-block scan
-    # would tear the shelf out from under itself.  The shortfall is shown
-    # honestly: row F's sum covers 992 bytes, and no BASIC reference row
-    # reaches past block 9 anyway.
+    # -- scan15: block 15 for the shelf edition -- 3C00h to 3FD7h only.
+    # On multiload firmware the window's last 40 bytes are live control
+    # addresses: 3FE0h+n commits a page switch and 3FD8h+j latches a bank
+    # for the two-touch protocol, so a full-block scan would tear the
+    # shelf out from under itself (or poison the next commit).  The
+    # shortfall is shown honestly: row F's sum covers 984 bytes, and no
+    # BASIC reference row reaches past block 9 anyway.
     a.label("scan15")
     a.lxi(RP_D, 0x0000)
     a.label("s15b")
@@ -174,12 +175,13 @@ def emit_scan15(a: Asm) -> None:
     a.mov(A, E); a.add(C); a.mov(E, A)
     a.mov(A, D); a.aci(0); a.mov(D, A)
     a.inx(RP_H)
-    a.mov(A, L); a.cpi(0xE0); a.jnz("s15b")
-    a.mov(A, H); a.cpi(0x3F); a.jnz("s15b")     # stop at 3FE0h exactly
+    a.mov(A, L); a.cpi(0xD8); a.jnz("s15b")
+    a.mov(A, H); a.cpi(0x3F); a.jnz("s15b")     # stop at 3FD8h exactly
     a.db(0xC9)                                  # RET
 
 
-def emit(a: Asm, refs: dict, data: dict, shelf: bool = False) -> None:
+def emit(a: Asm, refs: dict, data: dict, shelf: bool = False,
+         basic_page: int = 1) -> None:
     a.di()
     a.beacon(0)
 
@@ -222,7 +224,7 @@ def emit(a: Asm, refs: dict, data: dict, shelf: bool = False) -> None:
         # page 1 -- the diagnostics volume keeps BASIC-G 3.0 as its first
         # entry precisely so this index is stable -- and after the touch the
         # board needs its rebuild time, same contract as the menu's.
-        a.mvi(A, 0xE1); a.out(0x89)
+        a.mvi(A, 0xE0 | basic_page); a.out(0x89)
         a.mvi(A, 0x3F); a.out(0x8A)
         a.db(0xDB, 0x88)                        # IN 88h: the touch
         a.lxi(RP_B, 0x7000)                     # ~340 ms at 2.048 MHz
@@ -357,7 +359,8 @@ def build(refs: dict | None = None) -> bytes:
     return bytes(rom)
 
 
-def build_shelf(org: int = 0x4000, refs: dict | None = None) -> bytes:
+def build_shelf(org: int = 0x4000, refs: dict | None = None,
+                basic_page: int = 1) -> bytes:
     """The scanner as a multiload cartridge.  Same card, two differences a
     menu boot forces: the window it scans is swapped to the BASIC page
     first (a hotspot touch -- the volume's first entry must be BASIC-G
@@ -385,8 +388,9 @@ def build_shelf(org: int = 0x4000, refs: dict | None = None) -> bytes:
     head.jmp(org + ENTRY)
     img[0:len(head.buf)] = head.link()
 
+    assert 0 <= basic_page < 32, "single-touch reach only"
     a = Asm(org + ENTRY)
-    emit(a, refs, data, shelf=True)
+    emit(a, refs, data, shelf=True, basic_page=basic_page)
     body = a.link()
     assert ENTRY + len(body) <= DATA_OFF, \
         f"program overruns the data region: {len(body)} bytes"

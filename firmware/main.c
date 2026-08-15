@@ -122,6 +122,7 @@ static volatile uint32_t g_served;
 #define MHB_HS_NONE 0xFFFFFFFFu
 static volatile uint32_t g_hs_seen = MHB_HS_NONE;
 static unsigned g_cur_page;
+static unsigned g_hs_bank;      // two-touch latch; reset on every commit
 #endif
 
 #if MHB_DIAG >= 3
@@ -807,13 +808,19 @@ int main(void) {
         uint32_t seen = g_hs_seen; \
         if (seen != MHB_HS_NONE) { \
             g_hs_seen = MHB_HS_NONE; \
-            unsigned page = mhb_addr_from_index((uint16_t)seen) \
-                            & (MHB_MODULE_MAX_PAGES - 1u); \
-            if (page < mhb_page_count && page != g_cur_page) { \
-                g_cur_page = page; \
-                mhb_build_lut16_module(g_lut16, mhb_pages[page], 0xFF, \
-                                       MHB_MODULE_PARK_LEAD); \
-                mhb_mark_module_hotspots(g_lut16, MHB_MODULE_PARK_LEAD); \
+            unsigned off = mhb_addr_from_index((uint16_t)seen); \
+            if (off >= MHB_MODULE_BANKSEL_BASE \
+                    && off < MHB_MODULE_HOTSPOT_BASE) { \
+                g_hs_bank = off - MHB_MODULE_BANKSEL_BASE; \
+            } else { \
+                unsigned page = g_hs_bank * 32u + (off & 0x1Fu); \
+                g_hs_bank = 0; \
+                if (page < mhb_page_count && page != g_cur_page) { \
+                    g_cur_page = page; \
+                    mhb_build_lut16_module(g_lut16, mhb_pages[page], 0xFF, \
+                                           MHB_MODULE_PARK_LEAD); \
+                    mhb_mark_module_hotspots(g_lut16, MHB_MODULE_PARK_LEAD); \
+                } \
             } \
         } \
     } while (0)

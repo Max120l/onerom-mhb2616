@@ -127,7 +127,8 @@ class Bus:
         # loop to look right.
         self.pages = pages
         self.mod_page = 0
-        self.page_events = []     # (clock, page) at each hotspot sighting
+        self.mod_bank = 0         # two-touch latch: bank * 32 + n names >31
+        self.page_events = []     # (clock, page) at each commit sighting
         self.mod_reads = []       # (clock, addr) at each module data read
 
         # The keyboard matrix behind the system 8255: OUT F4h selects a
@@ -175,12 +176,18 @@ class Bus:
         self.key_columns = [0] * 16
 
     def _module_hotspot_check(self) -> None:
-        """A hotspot address on the latches, strobe live, names a page."""
+        """A hotspot address on the latches, strobe live, names a page.
+        Two-touch: a read of 0x3FD8+j latches bank j (no switch, no
+        rebuild); the 0x3FE0+n commit selects page j*32+n and resets the
+        latch, so a plain single touch still means pages 0-31."""
         if self.pages is None:
             return
         addr = (self.mod_c << 8) | self.mod_b
-        if (addr & 0xFFE0) == 0x3FE0:          # bits 14/15 clear: live read
-            page = addr & 0x1F
+        if (addr & 0xFFF8) == 0x3FD8:          # bank latch
+            self.mod_bank = addr & 0x07
+        elif (addr & 0xFFE0) == 0x3FE0:        # commit, bits 14/15 clear
+            page = self.mod_bank * 32 + (addr & 0x1F)
+            self.mod_bank = 0
             self.page_events.append((self.clock, page))
             if page < len(self.pages):
                 self.mod_page = page

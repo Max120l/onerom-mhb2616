@@ -424,12 +424,13 @@ static void test_module_hotspot_marks(void) {
         for (uint32_t idx = 0; idx < MHB_LUT_SIZE; idx++) {
             if (lut16[idx] & MHB_LUT16_HOTSPOT) flagged++;
         }
-        CHECK(flagged == (park ? 32u : 64u),
+        CHECK(flagged == (park ? 40u : 80u),
               "hotspots: %u entries flagged, expected %u (park=%u)",
-              flagged, park ? 32u : 64u, park);
+              flagged, park ? 40u : 80u, park);
 
-        for (unsigned n = 0; n < MHB_MODULE_MAX_PAGES; n++) {
-            unsigned addr = MHB_MODULE_HOTSPOT_BASE + n;
+        // 40 control addresses: 8 bank latches, then 32 commits.
+        for (unsigned n = 0; n < 40; n++) {
+            unsigned addr = MHB_MODULE_BANKSEL_BASE + n;
             uint16_t e = lut16[module_idx(addr, 7, true, false)];
             CHECK(e & MHB_LUT16_HOTSPOT,
                   "hotspot %u not flagged on a live read", n);
@@ -447,10 +448,10 @@ static void test_module_hotspot_marks(void) {
                   "hotspot %u park-state flag wrong (park=%u)", n, park);
         }
         // The neighbouring payload byte just below the region is clean.
-        CHECK(!(lut16[module_idx(MHB_MODULE_HOTSPOT_BASE - 1, 7, true, false)]
+        CHECK(!(lut16[module_idx(MHB_MODULE_BANKSEL_BASE - 1, 7, true, false)]
                 & MHB_LUT16_HOTSPOT), "flag leaked below the hotspot region");
         // Same in-bank address, different bank: clean.
-        CHECK(!(lut16[module_idx(MHB_MODULE_HOTSPOT_BASE, 6, true, false)]
+        CHECK(!(lut16[module_idx(MHB_MODULE_BANKSEL_BASE, 6, true, false)]
                 & MHB_LUT16_HOTSPOT), "flag leaked into bank 6");
     }
 }

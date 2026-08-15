@@ -195,8 +195,17 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
 // the hotspot, then leave the module alone for 300 ms before trusting a
 // read, which covers detection plus rebuild several times over.
 #define MHB_LUT16_HOTSPOT         0x1000u
-#define MHB_MODULE_HOTSPOT_BASE   0x7E0u    // in-bank, bank 7
-#define MHB_MODULE_MAX_PAGES      32u
+#define MHB_MODULE_HOTSPOT_BASE   0x7E0u    // in-bank, bank 7: commit row
+#define MHB_MODULE_BANKSEL_BASE   0x7D8u    // in-bank, bank 7: bank latch
+#define MHB_MODULE_MAX_PAGES      256u      // 8 banks x 32 commits
+//
+// Two-touch extension: a live read of 0x7D8+j (module 0x3FD8+j) latches
+// bank j without switching anything; the 0x7E0+n commit then selects page
+// j*32+n and resets the latch.  A plain single touch therefore still
+// means pages 0-31, and every stub written before the extension keeps
+// working.  The machine gives the bank touch ~20 ms before the commit so
+// core 0's poll consumes it first; only the commit pays the rebuild
+// delay.
 
 // Set the hotspot flag on the entries the machine can trigger.  Run after
 // every (re)build -- the builder writes whole entries and clears it.  With

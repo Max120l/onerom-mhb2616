@@ -171,6 +171,21 @@ volumes, including five games (GALAXIA, SPACE RAID, RESCUER, REVERZ,
 HLIPA) unlocked by modeling the idle tape port as the noisy open
 input it really is.
 
+Then the volumes merged.  The **omnibus** carries all 40 shelved games
+plus the diagnostics on one board -- 119 pages, 1.91 MB of the
+RP2354A's 2 MB -- behind a two-level menu: alphabetical directories
+plus a SYSTEM directory (BASICs, both test cards, the module scanner,
+the banner), each submenu just another menu page with a BACK entry.
+Pages beyond the hotspot row's 32 are named by a **two-touch
+protocol**: a read of module 3FD8h+j latches a bank (no rebuild, ~20 ms
+grace for the board's poll), the 3FE0h+n commit selects page j*32+n and
+resets the latch -- so every single-touch stub written before the
+extension still means pages 0-31.  Verified end to end from a true
+cold boot: reset vector, mirror map, the monitor initializing itself
+and booting the menu, a directory, a game four bank-switches deep on
+page 106, BACK, BASIC-G through SYSTEM, the scanner grading BASIC on
+its relocated page.
+
 A fifth volume carries the diagnostics: shelf editions of the screen
 test card (twice, marching complementary ranges 2000-BFFF and
 0000-9FFF, since a RAM-resident march cannot cover its own feet) and

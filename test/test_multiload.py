@@ -392,3 +392,37 @@ def test_pack_tool_refuses_the_refusable(tmp_path):
     many = [{"type": "demo", "name": f"E{i}"} for i in range(17)]
     with pytest.raises(SystemExit, match="16"):
         ml.build_pages(many, tmp_path)
+
+
+def test_two_touch_paging_and_directories(tmp_path):
+    # The omnibus features in miniature: a dir submenu boots from the main
+    # menu, its BACK entry returns, and the emulator's two-touch model
+    # names pages past 31 (bank latch at 3FD8h+j, commit at 3FE0h+n,
+    # single touches still meaning pages 0-31).
+    pages, ents = ml.build_pages(
+        [{"type": "dir", "name": "GAMES",
+          "entries": [{"type": "demo", "name": "CARD A"}]},
+         {"type": "demo", "name": "CARD B"}],
+        tmp_path)
+    assert [e["page"] for e in ents] == [1, 3]
+    bus = Bus(fake_monitor(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    bus.press(0, 2)                              # key 1: the GAMES dir
+    run_steps(cpu, 2_000_000)
+    bus.release_all()
+    assert bus.mod_page == 1, "submenu page not mapped"
+    run_steps(cpu, 100_000)                      # let its release-wait pass
+    bus.press(1, 2)                              # key 2: BACK (after CARD A)
+    run_steps(cpu, 2_000_000)
+    bus.release_all()
+    assert bus.mod_page == 0, "BACK did not return to the main menu"
+
+    # the model's arithmetic, straight on the latches
+    bus.mod_bank = 0
+    bus.mod_b, bus.mod_c = 0xDA, 0x3F            # bank latch: 3FDAh -> 2
+    bus._module_hotspot_check()
+    bus.mod_b, bus.mod_c = 0xE5, 0x3F            # commit: 3FE5h
+    bus._module_hotspot_check()
+    assert bus.page_events[-1][1] == 2 * 32 + 5
+    assert bus.mod_bank == 0, "commit must reset the latch"
