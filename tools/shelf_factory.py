@@ -53,15 +53,14 @@ class TapeBus(Bus):
     def __init__(self, tape=b'', **kw):
         super().__init__(**kw)
         self.tape = list(tape)
-        self.wrote = bytearray(0x8000)
+        self.wrote = bytearray(0x10000)
 
     def write(self, a, v):
         a &= 0xFFFF
         if 0x8000 <= a <= 0x8FFF:
             self.clock += 1
             return
-        if a < 0x8000:
-            self.wrote[a] = 1
+        self.wrote[a] = 1
         super().write(a, v)
 
     def inp(self, port):
@@ -121,13 +120,25 @@ def rip_turbo(prog: dict, monitors: list):
                     if not bus.tape and pc < 0x8000 \
                             and not (lo <= pc < hi):
                         snap = bytes(bus.ram[:0x8000])
-                        marks = [i for i, w in enumerate(bus.wrote) if w]
+                        marks = [i for i, w in enumerate(bus.wrote[:0x8000])
+                                 if w]
                         a0, b0 = marks[0], marks[-1] + 1
                         img = bytes(snap[i] if bus.wrote[i] else 0
                                     for i in range(a0, b0))
                         regs = {k: cpu.r[k] for k in 'ABCDEHL'}
                         regs['SP'] = cpu.sp
-                        return (img, a0, pc, regs, mon_name), None
+                        # the loading screen, if the loader painted one:
+                        # some games keep it as their title backdrop, some
+                        # put their only instructions on it
+                        vm = [i for i in range(0xC000, 0x10000)
+                              if bus.wrote[i]]
+                        screen = None
+                        if vm:
+                            s0, s1 = vm[0], vm[-1] + 1
+                            screen = (s0, bytes(
+                                bus.ram[i] if bus.wrote[i] else 0
+                                for i in range(s0, s1)))
+                        return (img, a0, pc, regs, mon_name, screen), None
                     if cpu.halted:
                         last = f'{mon_name}: HALT at {pc:04X}'
                         break
@@ -144,44 +155,122 @@ def rip_turbo(prog: dict, monitors: list):
 
 
 def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
-                monit3: bytes):
+                monit3: bytes, screen: tuple | None = None):
     """Boot the extracted image the way the SHELF will: fresh -2
-    environment, stage-2-style register init, cold jump.  A PASS here is a
-    game the stage-2 loader can genuinely start."""
-    bus, cpu = compat_machine(monit3)
-    bus.ram[load:load + len(image)] = image
-    for k in 'ABCDEHL':
-        cpu.r[k] = regs[k]
-    cpu.sp = regs['SP']
-    cpu.pc = exec_
-    try:
-        for _ in range(STEPS_SETTLE):
+    environment, screen segment applied, stage-2-style register init, cold
+    jump.  A PASS here is a game the stage-2 loader can genuinely start."""
+    def mk():
+        bus, cpu = compat_machine(monit3)
+        bus.ram[load:load + len(image)] = image
+        if screen is not None:
+            s0, sdata = screen
+            bus.ram[s0:s0 + len(sdata)] = sdata
+        bus.usart_reads = 0
+        for k in 'ABCDEHL':
+            cpu.r[k] = regs[k]
+        cpu.sp = regs['SP']
+        cpu.pc = exec_
+        return bus, cpu
+    return gauntlet(mk, rom_at_e000=False)
+
+
+def gauntlet(mk_machine, rom_at_e000: bool):
+    """Settle, nudge, then judge -- the full obstacle course a shelf entry
+    must survive, with every check named after the game that taught it:
+
+    - HLT anywhere: MAGICIAN's zeroed opcode waited behind the start key.
+    - 'executes VRAM': a crashed program that runs off into screen memory
+      paints self-sustaining static -- BLUDISTE's signature.  No cartridge
+      has business executing above C000h (above E000h it is the monitor's
+      ROM in a native boot, so the bound is per-environment).
+    - 'noise' backstop: static-like byte distribution on a lit screen --
+      what a multi-part loader's first stage (CERES-01, TVARE, TANK)
+      shows after inhaling the tape port's noise as its next stage.
+    - 'no draw': the lit floor, as ever.
+
+    Tape reads are NOT a verdict: healthy games poll the port and reject
+    its noise (KUBANOID, MAGICIAN) exactly as they do on the bench.
+    """
+    bus, cpu = mk_machine()
+    vram_hits = 0
+
+    def run(n, presses=None):
+        nonlocal vram_hits
+        if presses:
+            bus.press(*presses)
+        for _ in range(n):
             cpu.step()
+            pc = cpu.pc
+            if pc >= 0xC000 and (pc < 0xE000 or not rom_at_e000):
+                vram_hits += 1
+                if vram_hits > 50_000:
+                    return 'executes VRAM'
             if cpu.halted:
-                return 'halted', lit_bytes(bus), bus
-        # a HLT on a keypress is how MAGICIAN's corruption slipped
-        # through: the title drew, the crash waited for the start key
+                return 'halted'
+        return None
+
+    try:
+        why = run(STEPS_SETTLE)
+        if why:
+            return why, lit_bytes(bus), bus
         for key, col, mask in NUDGES:
-            bus.press(col, mask)
-            for _ in range(400_000):
-                cpu.step()
-                if cpu.halted:
-                    return f'halted on {key}', lit_bytes(bus), bus
+            why = run(400_000, (col, mask))
             bus.release_all()
-            for _ in range(400_000):
-                cpu.step()
-                if cpu.halted:
-                    return f'halted after {key}', lit_bytes(bus), bus
+            why = why or run(400_000)
+            if why:
+                return (why if why == 'executes VRAM'
+                        else f'{why} on {key}'), lit_bytes(bus), bus
     except NotImplementedError as e:
         return f'emulator: {e}', lit_bytes(bus), bus
     lit = lit_bytes(bus)
-    return ('PASS' if lit >= LIT_PASS else f'no draw ({lit} lit)'), lit, bus
+    if lit < LIT_PASS:
+        return f'no draw ({lit} lit)', lit, bus
+    if noisy(bus):
+        return 'noise (static-like byte distribution)', lit, bus
+    return 'PASS', lit, bus
+
+
+def noisy(bus) -> bool:
+    from collections import Counter
+    visible = [bus.ram[0xC000 + ln * 64 + c]
+               for ln in range(256) for c in range(48)]
+    top8 = sum(n for _, n in Counter(visible).most_common(8))
+    return top8 < len(visible) // 5
+
+
+class ShelfBus(Bus):
+    """The verification machine's bus: a real 8251 sits at 1Ch/1Dh with no
+    tape playing -- which on the bench means an open audio input picking
+    up hum, so the receiver clocks in garbage frames forever.  A silent
+    model (RxRDY never) was tried first and contradicted the bench both
+    ways: KUBANOID polls the port, rejects the junk and plays on (silent
+    = it waits forever); BLUDISTE inhales the junk and paints static
+    (silent = it draws nothing).  Deterministic noise reproduces the
+    machine; reads are still counted for the report."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.usart_reads = 0
+        self._prng = 0x2A5F
+
+    def _next(self):
+        self._prng = (self._prng * 0x41C6 + 0x3039) & 0x7FFF
+        return self._prng >> 7
+
+    def inp(self, port):
+        if (port & 0xFD) == 0x1C:
+            self.usart_reads += 1
+            return self._next() & 0xFF
+        if (port & 0xFD) == 0x1D:
+            self.usart_reads += 1
+            return 0x05 | (0x02 if self._next() & 1 else 0)
+        return super().inp(port)
 
 
 def compat_machine(monit3: bytes):
     """A -3 that has just executed JMP FFF0h: its manufactured -2 monitor
     at 8000h, AllRAM, stopped at the module probe."""
-    bus = Bus(monit3)
+    bus = ShelfBus(monit3)
     bus.startup_map = False
     bus.rom_visible = True
     cpu = CPU(bus)
@@ -189,6 +278,7 @@ def compat_machine(monit3: bytes):
     cpu.pc = 0xFFF0
     for _ in range(3_000_000):
         if cpu.pc == 0x802D:
+            bus.usart_reads = 0                  # the monitor's own boot
             return bus, cpu
         cpu.step()
     raise SystemExit("error: FFF0h relocation never reached 802Dh -- "
@@ -196,7 +286,7 @@ def compat_machine(monit3: bytes):
 
 
 def native_machine(monit3: bytes):
-    bus = Bus(monit3)
+    bus = ShelfBus(monit3)
     bus.startup_map = False
     bus.rom_visible = True
     cpu = CPU(bus)
@@ -232,31 +322,15 @@ def audition(prog: dict, monit3: bytes, env: str):
     load = prog['start']
     if load + len(body) > 0xC000:
         return 'loads past BFFF', 0, None
-    bus, cpu = (compat_machine if env == 'v2' else native_machine)(monit3)
-    bus.ram[load:load + len(body)] = body
-    cpu.pc = load                          # entry = header start field
-    try:
-        for _ in range(STEPS_SETTLE):
-            cpu.step()
-            if cpu.halted:
-                return 'halted', lit_bytes(bus), bus
-        for key, col, mask in NUDGES:
-            bus.press(col, mask)
-            for _ in range(400_000):
-                cpu.step()
-                if cpu.halted:
-                    return f'halted on {key}', lit_bytes(bus), bus
-            bus.release_all()
-            for _ in range(400_000):
-                cpu.step()
-                if cpu.halted:
-                    return f'halted after {key}', lit_bytes(bus), bus
-    except NotImplementedError as e:
-        return f'emulator: {e}', lit_bytes(bus), bus
-    lit = lit_bytes(bus)
-    if lit >= LIT_PASS:
-        return 'PASS', lit, bus
-    return f'no draw ({lit} lit)', lit, bus
+
+    def mk():
+        bus, cpu = (compat_machine if env == 'v2'
+                    else native_machine)(monit3)
+        bus.ram[load:load + len(body)] = body
+        bus.usart_reads = 0
+        cpu.pc = load                      # entry = header start field
+        return bus, cpu
+    return gauntlet(mk, rom_at_e000=(env != 'v2'))
 
 
 def gather_ptps(paths):
@@ -280,10 +354,11 @@ def gather_ptps(paths):
 _POOL = {}
 
 
-def _pool_init(monit3, monitors, out):
+def _pool_init(monit3, monitors, out, trust):
     _POOL['monit3'] = monit3
     _POOL['monitors'] = monitors
     _POOL['out'] = Path(out)
+    _POOL['trust'] = trust
 
 
 def _audition_one(job):
@@ -299,11 +374,14 @@ def _audition_one(job):
         got, why = rip_turbo(prog, monitors)
         if got is None:
             return name, src, f'turbo rip failed: {why}', None
-        image, load, exec_, regs, mon_name = got
-        verdict, lit, bus = verify_cold(image, load, exec_, regs, monit3)
+        image, load, exec_, regs, mon_name, screen = got
+        verdict, lit, bus = verify_cold(image, load, exec_, regs, monit3,
+                                        screen)
         if bus is not None:
             screenshot(bus, out / "shots" / f"{tag}.png")
-        if verdict != 'PASS':
+        if verdict != 'PASS' and name.strip() in _POOL['trust']:
+            verdict = f'TRUSTED (bench-attested; gauntlet said: {verdict})'
+        if not verdict.startswith(('PASS', 'TRUSTED')):
             return name, src, (f'turbo rip ok via {mon_name} but cold '
                                f'boot: {verdict}'), None
         (out / "verified" / f"{tag}.bin").write_bytes(image)
@@ -313,14 +391,24 @@ def _audition_one(job):
                "mode": "v2",
                "regs": {k.lower(): f"0x{regs[k]:02X}" for k in 'ABCDEHL'}
                | {"sp": f"0x{regs['SP']:04X}"}}
-        return name, src, (f'PASS (turbo via {mon_name}, {lit} lit, '
-                           f'{len(image)} B at {load:04X}, '
-                           f'exec {exec_:04X})'), ent
+        note = ''
+        if screen is not None:
+            s0, sdata = screen
+            (out / "verified" / f"{tag}.scr").write_bytes(sdata)
+            ent["screen"] = {"file": f"verified/{tag}.scr",
+                             "load": f"0x{s0:04X}"}
+            note = f', {len(sdata)} B screen'
+        return name, src, (f'{verdict.split(" ")[0]} (turbo via '
+                           f'{mon_name}, {lit} lit, {len(image)} B at '
+                           f'{load:04X}, exec {exec_:04X}{note})'), ent
     if not prog['body']:
         return name, src, 'no body block', None
     verdict = '?'
     for env in ('v2', 'v3'):
         verdict, lit, bus = audition(prog, monit3, env)
+        if verdict != 'PASS' and env == 'v2' \
+                and name.strip() in _POOL['trust']:
+            verdict = 'PASS'      # bench-attested; objection in the log
         if verdict == 'PASS':
             if bus is not None:
                 screenshot(bus, out / "shots" / f"{tag}.png")
@@ -344,6 +432,13 @@ def main() -> int:
                     help="directory with monit2A/monit2/monit2B/monit1 "
                          ".rom files; enables turbo-loader extraction")
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--trust", action="append", default=[],
+                    help="program name whose shelf-worthiness is attested "
+                         "on real hardware; emitted even when the gauntlet "
+                         "objects, with the objection printed.  The bench "
+                         "outranks the emulator -- KUBANOID plays fine on "
+                         "the machine and dies under one particular noise "
+                         "stream here")
     args = ap.parse_args()
 
     monit3 = args.monitor3.read_bytes()
@@ -378,7 +473,8 @@ def main() -> int:
 
     import multiprocessing as mp
     with mp.Pool(min(mp.cpu_count(), 8), _pool_init,
-                 (monit3, monitors, str(args.out))) as pool:
+                 (monit3, monitors, str(args.out),
+                  {t.strip() for t in args.trust})) as pool:
         for name, src, verdict, ent in pool.imap_unordered(_audition_one,
                                                            jobs):
             print(f"  {name:10s} {verdict}", flush=True)

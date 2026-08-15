@@ -492,17 +492,53 @@ ready-to-paste manifest entries; everything else is listed with its
 reason, because a shelf that silently drops games reads as "checked
 everything" when it did not.
 
-Two lessons the factory learned from hardware, both found by MAGICIAN
-crashing on its start key after passing every host check.  First: what
-a turbo loader wrote must be tracked with a **write bitmap**, not a
-sentinel prefill — a byte still reading `AAh` at handoff might be
-untouched RAM or might be sprite data the loader legitimately wrote,
-and the first rig shipped both as `00h`, silently corrupting every
-extraction that contained the sentinel's own value (MAGICIAN lost 21
-bytes, one of them an opcode).  Second: the cold-boot verifier must
-watch for HLT **while it presses its nudge keys**, not only during the
-settle — a title screen that draws proves the intro runs, and says
-nothing about the code behind the start key.
+The factory's checks were each earned by a shipped game failing on the
+bench after passing every host check of the day.  In the order the
+bench taught them:
+
+- **A write bitmap, not a sentinel.**  A byte still reading `AAh` at
+  handoff might be untouched RAM or sprite data the loader legitimately
+  wrote; the first rig shipped both as `00h`, silently corrupting every
+  extraction containing the sentinel's own value.  MAGICIAN lost 21
+  bytes, one of them the opcode behind its start key.
+- **Watch for HLT while pressing keys.**  A title that draws proves the
+  intro runs and says nothing about the code behind the start key —
+  the gap MAGICIAN's corruption walked through.
+- **"Draws" is not "is the game".**  BLUDISTE's capture was the 8 KB
+  first stage of a multi-part load; CERES-01's was a compilation
+  selector whose four games are not in the corpus; TANK and TVARE ship
+  only their intros, their real content (levels included) streaming
+  from tape.  None of these can ever run from a module.
+- **The idle tape port is noisy, not silent.**  With no tape playing
+  the 8251 hangs off an open audio input, so it clocks garbage frames
+  forever.  A silent model contradicted the bench both ways — KUBANOID
+  polls the port, rejects the junk and plays on; BLUDISTE inhales it
+  and paints the purple static the bench actually shows.  The verifier
+  feeds deterministic noise and judges *behavior*: HLT, executing from
+  VRAM (BLUDISTE's static turned out to be a crashed program running
+  through screen memory), static-like byte distribution, or no draw.
+- **The bench outranks the emulator.**  No single noise stream
+  reproduces every real machine: ATOMIX, SOLITER and KUBANOID play
+  fine on hardware and die under one particular synthetic stream.
+  `--trust NAME` ships a bench-attested game over the gauntlet's
+  objection, with the objection printed in the report.
+- **Loading screens are content.**  Turbo loaders paint VRAM, and games
+  keep it: ARKANOID's mothership title backdrop, BOULDER DASH's only
+  instructions.  The rip captures the written VRAM extent as a second
+  segment; the stage-2 loader ships it into C000-FFFF after the
+  program (its stack moved to B1F0h first, out of the way).
+- **The clean room.**  Every extraction is verified in a zero-RAM
+  machine, but a menu boot hands over RAM full of leftovers — JERRY
+  drew nothing, ONA A DUCH halted, only ever on the bench.  Stage-2
+  now zeroes everything it is not about to fill, minus the relocated
+  monitor in v2 mode and the VRAM margins in every mode (the invisible
+  16 bytes per line are the monitor's live variable space).
+- **Some games need their birth monitor.**  CROSFIRE and COBRA index
+  monit1's keyboard tables at `83F0h`; under the v2 compat monitor
+  every key translated to nothing.  An `overlay` entry option ships
+  monit1's 4 KB as cargo at `8000h` in a native boot, where that
+  region is plain RAM (v2 boots refuse the combination — the overlay
+  would overwrite the 8C00h reader mid-copy).
 
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire

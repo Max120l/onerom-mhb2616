@@ -123,7 +123,7 @@ LN_TITLE = 6
 LN_ENTRY0, ENTRY_STEP = 22, 9
 TEXT_COL = 4
 
-VRAM, STRIDE = 0xC000, 64
+VRAM, STRIDE, COLS = 0xC000, 64, 48
 
 
 def vaddr(line: int, col: int = 0) -> int:
@@ -422,6 +422,9 @@ def emit_hotspot_touch(a: MAsm) -> None:
     a.ret()
 
 
+STAGE2_SP = 0xB1F0                # stage-2's own stack, beside its code
+
+
 def build_stage2(chunks: list, exec_: int, v2: bool,
                  regs: dict | None = None) -> bytes:
     """The chunk loader for a multi-page cartridge: for each (page, src,
@@ -430,9 +433,53 @@ def build_stage2(chunks: list, exec_: int, v2: bool,
     reader at its generation's address -- which is the only difference v2
     makes here.  `regs` recreates a tape loader's handoff state for
     programs extracted mid-flight; without it the entry gets the plain
-    cold-boot state every directly-authored cartridge uses."""
+    cold-boot state every directly-authored cartridge uses.
+
+    First order of business is moving the stack: the boot stub left SP in
+    the VRAM margin, and a cartridge with a screen segment loads bytes
+    exactly there.  B1F0h sits beside this loader, in a strip both the
+    payload asserts keep clear.
+
+    Then the clean room: every byte this loader is not about to fill is
+    zeroed first -- 0000h up to this loader, its far side up to the top of
+    VRAM, minus the relocated monitor in v2 mode.  The factory verified
+    every extraction in a zero-RAM machine; a menu boot hands over RAM
+    full of leftovers, and the difference is exactly the class of failure
+    that only ever shows up on the bench (JERRY draws nothing, ONA A DUCH
+    halts).  Clearing makes the hardware boot byte-identical to the boot
+    that was verified.
+
+    Two exemptions from the clear, both learned the hard way: the
+    relocated monitor in v2 mode, and the VRAM margins in every mode --
+    the invisible 16 bytes of each 64-byte line are the monitor's own
+    variable space, initialized at its boot, and a game that calls the
+    monitor mid-play needs them alive.  The visible 48 columns are
+    cleared line by line instead."""
     routine = EC00_V2 if v2 else EC00
     a = MAsm(STAGE2_ORG)
+    a.lxi(RP_SP, STAGE2_SP)
+    spans = ([(0x0000, 0x8000), (0x9000, 0xB000)] if v2
+             else [(0x0000, 0xB000)]) + [(0xB200, 0xC000)]
+    for i, (z0, z1) in enumerate(spans):
+        a.lxi(RP_H, z0)
+        a.label(f"clr{i}")
+        a.mvi(M, 0x00)
+        a.inx(RP_H)
+        a.mov(A, H)
+        a.cpi(z1 >> 8)
+        a.jnz(f"clr{i}")
+    a.lxi(RP_D, STRIDE - COLS)       # skip a line's invisible margin
+    a.label("clrv")                  # HL = C000h here
+    a.mvi(B, COLS)
+    a.label("clrvc")
+    a.mvi(M, 0x00)
+    a.inx(RP_H)
+    a.dcr(B)
+    a.jnz("clrvc")
+    a.dad(RP_D)
+    a.mov(A, H)
+    a.ora(A)                         # H wraps to 00h past the last line
+    a.jnz("clrv")
     cur = None
     for page, src, count, dest in chunks:
         if page != cur:
@@ -461,26 +508,41 @@ def build_stage2(chunks: list, exec_: int, v2: bool,
 
 def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
                      first_page: int, v2: bool,
-                     regs: dict | None = None) -> list:
+                     regs: dict | None = None,
+                     screen: tuple | None = None) -> list:
     """Pages for a binary too big for one page.  Page 1: stub + stage-2 +
-    first chunk; continuation pages: raw chunks from offset 0."""
+    first chunk; continuation pages: raw chunks packed tight.  `screen` is
+    an optional (vram_addr, bytes) second segment -- the loading screen a
+    turbo loader painted, which some games keep as their title backdrop
+    (ARKANOID's mothership) or their only instructions (BOULDER DASH) --
+    loaded after the program, straight into C000-FFFF."""
+    segments = [(load, payload)]
+    if screen is not None:
+        sload, sdata = screen
+        if not (0xC000 <= sload and sload + len(sdata) <= 0x10000):
+            raise SystemExit(f"error: {name}: screen segment "
+                             f"{sload:04X}+{len(sdata)} outside VRAM")
+        segments.append((sload, sdata))
     if load + len(payload) > 0xC000:
         raise SystemExit(f"error: {name} would load over "
                          f"{load + len(payload) - 1:04X}; RAM ends at BFFF")
-    if load <= STAGE2_ORG + STAGE2_MAX and load + len(payload) > STAGE2_ORG:
-        raise SystemExit(f"error: {name} loads over the stage-2 loader at "
-                         f"{STAGE2_ORG:04X}; not supported yet")
+    if load < STAGE2_ORG + 0x200 and load + len(payload) > STAGE2_ORG:
+        raise SystemExit(f"error: {name} loads over the stage-2 loader and "
+                         f"its stack at {STAGE2_ORG:04X}-{STAGE2_SP:04X}; "
+                         f"not supported yet")
     chunks = []
-    off = 0
-    page = first_page
-    src0 = PAYLOAD2_BASE
-    while off < len(payload):
-        n = min(len(payload) - off, PAGE_CHUNK - src0)
-        chunks.append((page, src0, ec_count(n), load + off, off, n))
-        off += n
-        page += 1
-        src0 = 0
-    stage2 = build_stage2([(p, s, c, d) for p, s, c, d, _, _ in chunks],
+    page, src0 = first_page, PAYLOAD2_BASE
+    for base, data in segments:
+        off = 0
+        while off < len(data):
+            if src0 >= PAGE_CHUNK:
+                page, src0 = page + 1, 0
+            n = min(len(data) - off, PAGE_CHUNK - src0)
+            chunks.append((page, src0, ec_count(n), base + off,
+                           data[off:off + n]))
+            off += n
+            src0 += n
+    stage2 = build_stage2([(p, s, c, d) for p, s, c, d, _ in chunks],
                           exec_, v2, regs)
     sig = 0xCD if v2 else 0xCC
     stub = bytearray(boot_stub(PAYLOAD_BASE, ec_count(len(stage2)),
@@ -488,14 +550,22 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
     stub[0] = sig
     stub[2] = (EC00_V2 if v2 else EC00) >> 8
     pages = []
-    for k, (p, s, c, d, o, n) in enumerate(chunks):
-        if k == 0:
-            head = bytes(stub) + bytes(PAYLOAD_BASE - len(stub)) + stage2
-            head += bytes(PAYLOAD2_BASE - len(head))
-            pages.append(pad_page(head + payload[o:o + n]))
+    for p, s, c, d, blob in chunks:
+        pageno = p - first_page
+        if pageno == len(pages) - 1:
+            assert len(pages[-1]) == s, "page-sharing chunk misaligned"
+            pages[-1] += blob
         else:
-            pages.append(pad_page(payload[o:o + n]))
-    return pages
+            assert pageno == len(pages), "chunk pages out of order"
+            if pageno == 0:
+                head = bytes(stub) + bytes(PAYLOAD_BASE - len(stub)) + stage2
+                head += bytes(PAYLOAD2_BASE - len(head))
+                assert len(head) == s
+                pages.append(head + blob)
+            else:
+                assert s == 0
+                pages.append(blob)
+    return [pad_page(pg) for pg in pages]
 
 
 def page_from_binary(payload: bytes, load: int, exec_: int, name: str,
@@ -547,19 +617,41 @@ def build_pages(entries: list, root: Path) -> tuple:
                 payload = (root / ent["file"]).read_bytes()
                 load = int(ent["load"], 0)
                 exec_ = int(ent.get("exec", ent["load"]), 0)
+            if "overlay" in ent:
+                # Extra bytes merged into the image at a fixed address --
+                # the customer is a game that indexes its host monitor's
+                # data (CROSFIRE walks monit1's key table at 83F0h), served
+                # by shipping that monitor as cargo.  Native boots only: in
+                # v2 mode 8000-8FFFh holds the relocated monitor whose
+                # 8C00h reader is doing the loading, and an overlay there
+                # would saw off the branch it is sitting on.
+                ov = (root / ent["overlay"]["file"]).read_bytes()
+                at = int(ent["overlay"]["at"], 0)
+                if at < load:
+                    raise SystemExit(f"error: {name}: overlay at {at:04X}h "
+                                     f"below the load address {load:04X}h")
+                if v2 and at < 0x9000:
+                    raise SystemExit(f"error: {name}: overlay at "
+                                     f"{at:04X}h clobbers the v2 loader")
+                end = max(load + len(payload), at + len(ov))
+                img = bytearray(end - load)
+                img[0:len(payload)] = payload
+                img[at - load:at - load + len(ov)] = ov
+                payload = bytes(img)
             what = ent.get("program", ent.get("file", name))
             regs = None
             if "regs" in ent:
                 regs = {k: int(v, 0) for k, v in ent["regs"].items()}
-            if regs is not None or \
-                    PAYLOAD_BASE + len(payload) > HOTSPOT_MODULE_ADDR:
-                # Register state needs the stage-2 loader, so a small
-                # program with regs takes the multi-page route too.
-                pages.extend(multipage_binary(payload, load, exec_, what,
-                                              page_no, v2, regs))
-            else:
-                pages.append(page_from_binary(payload, load, exec_, what,
-                                              v2=v2))
+            screen = None
+            if "screen" in ent:
+                screen = (int(ent["screen"]["load"], 0),
+                          (root / ent["screen"]["file"]).read_bytes())
+            # Every program entry takes the stage-2 route now -- not only
+            # the multi-page and register-restore cases, but the small
+            # singles too, because stage-2 is where the clean-room clear
+            # lives, and a verified-in-zero-RAM program deserves zero RAM.
+            pages.extend(multipage_binary(payload, load, exec_, what,
+                                          page_no, v2, regs, screen))
         elif kind == "demo":
             payload, load, exec_ = build_demo()
             pages.append(page_from_binary(payload, load, exec_, "demo"))

@@ -150,20 +150,26 @@ factory rips loaders against real monitor images, captures the handoff
 register file, and cold-verifies each extraction exactly as the shelf
 boots it.
 
-The first shipped census (34 of 90) then met real hardware, and
-hardware found what the host checks had missed: the rig's sentinel
-prefill (0xAA) could not tell "never written" from "the loader wrote
-0xAA", and shipped every such byte as 0x00 -- 479 corrupted bytes
-across 18 games, crashing MAGICIAN's start key, mangling ARKANOID's
-and Jet Set Willy's sprites, deafening BOULDER DASH's keyboard
-handler.  A write bitmap replaced the sentinel, the verifier learned
-to watch for HLT while pressing its nudge keys (the gap the crash had
-walked through), and the re-audition came back **39 verified of 90**,
-nothing lost -- five former "holdouts" (KVADRO, KVADRO.E, MANIC+,
-PEXESO, TVARE) had been corruption victims all along.  Shipped as four
-shelf volumes, lead games and the bug's whole cast boot-tested through
-the full chain including the start key.  Both factory lessons are
-written up in docs/ROM-module.md.
+The first shipped census (34 of 90) then met real hardware, and two
+rounds of bench testing taught the factory most of what it now knows
+-- the full list of earned checks lives in docs/ROM-module.md.  Round
+one found the sentinel-prefill corruption (479 bytes across 18 games:
+MAGICIAN's crashed start key, ARKANOID's mangled sprites, BOULDER
+DASH's deaf keyboard).  Round two found the incomplete multi-part
+captures (BLUDISTE, CERES-01, TANK, TVARE -- first stages that stream
+the rest from tape, unshippable), the dirty-RAM crashes that only
+happen after a menu boot (JERRY, ONA A DUCH, MESTO -- fixed by the
+stage-2 clean room), the games that index their birth monitor's key
+tables (CROSFIRE, COBRA -- fixed by shipping monit1 as cargo), and
+the fact that turbo loaders' painted VRAM is content the shelf was
+dropping (ARKANOID's mothership, BOULDER DASH's instructions -- now
+captured and shipped as a second load segment).
+
+The standing census: **42 shelf-worthy of 90** -- 39 through the
+gauntlet plus three bench-attested over its objection -- across five
+volumes, including five games (GALAXIA, SPACE RAID, RESCUER, REVERZ,
+HLIPA) unlocked by modeling the idle tape port as the noisy open
+input it really is.
 
 A fifth volume carries the diagnostics: shelf editions of the screen
 test card (twice, marching complementary ranges 2000-BFFF and

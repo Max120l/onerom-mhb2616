@@ -91,8 +91,9 @@ def test_turbo_rip_preserves_sentinel_valued_bytes():
     prog = {"start": 0x7F00, "body": body, "raws": [payload]}
     got, why = sf.rip_turbo(prog, [("fake", bytes(0x1000))])
     assert got is not None, why
-    image, load, exec_, regs, mon = got
+    image, load, exec_, regs, mon, screen = got
     assert load == 0x4000 and exec_ == 0x4000
+    assert screen is None, "no VRAM was painted by this loader"
     assert image[:len(payload)] == payload, \
         "0xAA bytes in loaded data must survive extraction"
     # the unwritten gap between payload and loader body ships as zeros
