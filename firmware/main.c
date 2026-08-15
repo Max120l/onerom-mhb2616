@@ -813,8 +813,15 @@ int main(void) {
                     && off < MHB_MODULE_HOTSPOT_BASE) { \
                 g_hs_bank = off - MHB_MODULE_BANKSEL_BASE; \
             } else { \
+                /* The bank latch is PERSISTENT: only a bank touch moves \
+                 * it.  Resetting it here was the two-touch launch bug -- \
+                 * the parked commit address stays on the latches, core 1 \
+                 * keeps reporting it, and a re-consumption 5 ms later \
+                 * must compute the SAME page, exactly as the single-touch \
+                 * design was idempotent by construction.  Every generated \
+                 * stub sends the pair, so a stale bank never leaks into a \
+                 * later switch. */ \
                 unsigned page = g_hs_bank * 32u + (off & 0x1Fu); \
-                g_hs_bank = 0; \
                 if (page < mhb_page_count && page != g_cur_page) { \
                     g_cur_page = page; \
                     mhb_build_lut16_module(g_lut16, mhb_pages[page], 0xFF, \

@@ -310,9 +310,9 @@ def test_multipage_binary_boots_across_page_switches(tmp_path):
     bus.press(0, 2)                               # key "1"
     assert run_until_pc(cpu, 0x1000, 8_000_000), "big binary never entered"
     assert bytes(bus.ram[0x1000:0x1000 + len(payload)]) == payload
-    # Page switches: the menu touches page 1, stage-2 re-touches it (cheap,
-    # idempotent) and then pages to 2.  Every touch honours the delay.
-    assert [p for _, p in bus.page_events] == [1, 1, 2]
+    # Page switches: the menu touches page 1, stage-2 re-touches it
+    # (idempotent, so invisible in the transition log) and pages to 2.
+    assert [p for _, p in bus.page_events] == [1, 2]
     for k, (t, _) in enumerate(bus.page_events):
         later = [c for c, _ in bus.mod_reads if c > t]
         if later:
@@ -425,4 +425,14 @@ def test_two_touch_paging_and_directories(tmp_path):
     bus.mod_b, bus.mod_c = 0xE5, 0x3F            # commit: 3FE5h
     bus._module_hotspot_check()
     assert bus.page_events[-1][1] == 2 * 32 + 5
-    assert bus.mod_bank == 0, "commit must reset the latch"
+    # The latch is PERSISTENT, and re-consuming the held (parked) commit
+    # address must name the SAME page -- resetting the latch on commit was
+    # the two-touch launch bug: the parked address stays on the latches,
+    # the board re-consumes it every poll, and with a zeroed bank the
+    # second consumption switched to page n of bank 0 mid-load (GALAXIA
+    # and RESCUER, every game past page 31 on the omnibus).
+    assert bus.mod_bank == 2, "the bank latch must persist"
+    bus.mod_b, bus.mod_c = 0xE5, 0xFF            # the parked held address
+    bus._module_hotspot_check()
+    assert bus.page_events[-1][1] == 2 * 32 + 5, \
+        "re-consuming the held commit must be idempotent"

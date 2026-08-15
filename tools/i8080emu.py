@@ -176,19 +176,25 @@ class Bus:
         self.key_columns = [0] * 16
 
     def _module_hotspot_check(self) -> None:
-        """A hotspot address on the latches, strobe live, names a page.
-        Two-touch: a read of 0x3FD8+j latches bank j (no switch, no
-        rebuild); the 0x3FE0+n commit selects page j*32+n and resets the
-        latch, so a plain single touch still means pages 0-31."""
+        """A hotspot address on the latches names a page -- live OR
+        parked, because a board without the park lead flags both states,
+        and the latches HOLD the parked address long after the touch, so
+        the firmware re-consumes it every poll.  Two-touch: 0x3FD8+j
+        latches bank j (persistent -- resetting it on commit was the
+        launch bug, breaking the idempotence a held address depends on);
+        the 0x3FE0+n commit selects page j*32+n."""
         if self.pages is None:
             return
         addr = (self.mod_c << 8) | self.mod_b
-        if (addr & 0xFFF8) == 0x3FD8:          # bank latch
-            self.mod_bank = addr & 0x07
-        elif (addr & 0xFFE0) == 0x3FE0:        # commit, bits 14/15 clear
-            page = self.mod_bank * 32 + (addr & 0x1F)
-            self.mod_bank = 0
-            self.page_events.append((self.clock, page))
+        wa = addr & 0x3FFF                     # in-window, either park state
+        if (wa & 0x3FF8) == 0x3FD8:            # bank latch
+            self.mod_bank = wa & 0x07
+        elif (wa & 0x3FE0) == 0x3FE0:          # commit
+            page = self.mod_bank * 32 + (wa & 0x1F)
+            # consecutive re-sightings of the held address are the normal
+            # parked state and change nothing; log page transitions only
+            if not self.page_events or self.page_events[-1][1] != page:
+                self.page_events.append((self.clock, page))
             if page < len(self.pages):
                 self.mod_page = page
 
