@@ -59,16 +59,23 @@ import ptp_lib
 
 
 def tape_block(path, program):
-    """A simple tape program's (payload, load address).  Turbo-loader
-    programs are refused: their memory image is assembled by a loader the
-    extraction pipeline does not fully model yet."""
-    p = ptp_lib.find_program(path, program)
-    if p['raws']:
-        raise SystemExit(
-            f"error: {program} is a turbo-loader program ({len(p['raws'])} "
-            f"raw blocks after the body); only plain one-block programs "
-            f"can be shelved from tape so far")
-    return bytes(p['body']), p['start']
+    """A simple tape program's (payload, load address).  A tape may hold
+    several same-named programs (gredit16.ptp carries a turbo variant and
+    two plain ones); the plain one is what a tape entry means, so the
+    first raw-less match wins.  Turbo-loader programs are refused: their
+    memory image is assembled by a loader, and the factory ships those as
+    extracted binaries instead."""
+    matches = [q for q in ptp_lib.programs_of(path)
+               if q['name'].strip() == program.strip()]
+    if not matches:
+        raise SystemExit(f"error: no program {program!r} in {path}")
+    for q in matches:
+        if not q['raws']:
+            return bytes(q['body']), q['start']
+    raise SystemExit(
+        f"error: {program} is a turbo-loader program ({len(matches[0]['raws'])} "
+        f"raw blocks after the body); only plain one-block programs "
+        f"can be shelved from tape so far")
 
 PAGE = 16384
 HOTSPOT_MODULE_ADDR = 0x3FE0     # commit hotspot 0; +n names page bank*32+n
@@ -538,7 +545,8 @@ def build_stage2(chunks: list, exec_: int, v2: bool,
 def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
                      first_page: int, v2: bool,
                      regs: dict | None = None,
-                     screen: tuple | None = None) -> list:
+                     screen: tuple | None = None,
+                     high: tuple | None = None) -> list:
     """Pages for a binary too big for one page.  Page 1: stub + stage-2 +
     first chunk; continuation pages: raw chunks packed tight.  `screen` is
     an optional (vram_addr, bytes) second segment -- the loading screen a
@@ -546,6 +554,15 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
     (ARKANOID's mothership) or their only instructions (BOULDER DASH) --
     loaded after the program, straight into C000-FFFF."""
     segments = [(load, payload)]
+    if high is not None:
+        h0, hdata = high
+        if not (0x9000 <= h0 and h0 + len(hdata) <= 0xC000):
+            raise SystemExit(f"error: {name}: high segment "
+                             f"{h0:04X}+{len(hdata)} outside 9000-BFFF")
+        if h0 < STAGE2_SP + 0x10 and h0 + len(hdata) > STAGE2_ORG:
+            raise SystemExit(f"error: {name}: high segment overlaps the "
+                             f"stage-2 loader at {STAGE2_ORG:04X}")
+        segments.append((h0, hdata))
     if screen is not None:
         sload, sdata = screen
         if not (0xC000 <= sload and sload + len(sdata) <= 0x10000):
@@ -675,12 +692,16 @@ def build_pages(entries: list, root: Path) -> tuple:
             if "screen" in ent:
                 screen = (int(ent["screen"]["load"], 0),
                           (root / ent["screen"]["file"]).read_bytes())
+            high = None
+            if "high" in ent:
+                high = (int(ent["high"]["load"], 0),
+                        (root / ent["high"]["file"]).read_bytes())
             # Every program entry takes the stage-2 route now -- not only
             # the multi-page and register-restore cases, but the small
             # singles too, because stage-2 is where the clean-room clear
             # lives, and a verified-in-zero-RAM program deserves zero RAM.
             pages.extend(multipage_binary(payload, load, exec_, what,
-                                          page_no, v2, regs, screen))
+                                          page_no, v2, regs, screen, high))
         elif kind == "demo":
             payload, load, exec_ = build_demo()
             pages.append(page_from_binary(payload, load, exec_, "demo"))

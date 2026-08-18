@@ -93,9 +93,17 @@ def rip_turbo(prog: dict, monitors: list):
     leadered = b''.join(ptp_lib.LEADER + r for r in prog['raws'])
     variants = [(plain, False), (plain, True),
                 (leadered, False), (leadered, True)]
+    # The header's start field is the LOAD address; for most loaders it is
+    # also the entry, but the +4 family points it at an internal
+    # subroutine and really starts at its DI -- so every DI in the body
+    # is an entry candidate (SABOTER's is 47 bytes in).
+    entries = [start] + [start + i for i, b in enumerate(body)
+                         if b == 0xF3][:3]
+    entries = list(dict.fromkeys(entries))
     last = 'never ran'
     for mon_name, mon in monitors:
         for stream, nudge in variants:
+          for entry in entries:
             for dreg in (0xFF, 0x00):
                 bus = TapeBus(tape=stream, rom=bytes(0x2000))
                 bus.startup_map = False
@@ -104,9 +112,13 @@ def rip_turbo(prog: dict, monitors: list):
                     bus.ram[a] = SENTINEL
                 bus.ram[0x8000:0x8000 + len(mon)] = mon
                 cpu = CPU(bus)
-                bus.ram[start:start + len(body)] = body
+                # clip at the monitor: on the real machine 8000h+ is ROM,
+                # so a header block that nominally runs past it loses its
+                # tail exactly as it would on the bench
+                bus.ram[start:min(start + len(body), 0x8000)] = \
+                    body[:max(0, 0x8000 - start)]
                 cpu.sp = 0xBFF0
-                cpu.pc = start
+                cpu.pc = entry
                 cpu.r['D'] = dreg
                 cpu.z, cpu.cy = True, False
                 # the loader body is content too: games reuse its bytes
@@ -117,8 +129,8 @@ def rip_turbo(prog: dict, monitors: list):
                 lo, hi = start, start + len(body)
                 for step in range(12_000_000):
                     pc = cpu.pc
-                    if not bus.tape and pc < 0x8000 \
-                            and not (lo <= pc < hi):
+                    if not bus.tape and not (lo <= pc < hi) \
+                            and not (0x8000 <= pc < 0x9000):
                         snap = bytes(bus.ram[:0x8000])
                         marks = [i for i, w in enumerate(bus.wrote[:0x8000])
                                  if w]
@@ -138,7 +150,20 @@ def rip_turbo(prog: dict, monitors: list):
                             screen = (s0, bytes(
                                 bus.ram[i] if bus.wrote[i] else 0
                                 for i in range(s0, s1)))
-                        return (img, a0, pc, regs, mon_name, screen), None
+                        # ...and anything stored above the monitor: BOULDER
+                        # DASH keeps a 24-byte table at BFD8h that its menu
+                        # renderer walks -- shipped as its own segment,
+                        # because the image extent stops at 8000h
+                        hm = [i for i in range(0x9000, 0xC000)
+                              if bus.wrote[i]]
+                        high = None
+                        if hm:
+                            h0, h1 = hm[0], hm[-1] + 1
+                            high = (h0, bytes(
+                                bus.ram[i] if bus.wrote[i] else 0
+                                for i in range(h0, h1)))
+                        return (img, a0, pc, regs, mon_name, screen,
+                                high), None
                     if cpu.halted:
                         last = f'{mon_name}: HALT at {pc:04X}'
                         break
@@ -155,7 +180,8 @@ def rip_turbo(prog: dict, monitors: list):
 
 
 def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
-                monit3: bytes, screen: tuple | None = None):
+                monit3: bytes, screen: tuple | None = None,
+                high: tuple | None = None):
     """Boot the extracted image the way the SHELF will: fresh -2
     environment, screen segment applied, stage-2-style register init, cold
     jump.  A PASS here is a game the stage-2 loader can genuinely start."""
@@ -165,16 +191,29 @@ def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
         if screen is not None:
             s0, sdata = screen
             bus.ram[s0:s0 + len(sdata)] = sdata
+        if high is not None:
+            h0, hdata = high
+            bus.ram[h0:h0 + len(hdata)] = hdata
         bus.usart_reads = 0
         for k in 'ABCDEHL':
             cpu.r[k] = regs[k]
         cpu.sp = regs['SP']
         cpu.pc = exec_
         return bus, cpu
-    return gauntlet(mk, rom_at_e000=False)
+    # execution inside a shipped segment is the program, not a crash --
+    # the +4 family runs real code up in the VRAM region (SABOTER enters
+    # at FA43h); BLUDISTE-style noise runs live outside anything shipped
+    ok = []
+    if screen is not None:
+        ok.append((screen[0], screen[0] + len(screen[1])))
+    if high is not None:
+        ok.append((high[0], high[0] + len(high[1])))
+    def exec_ok(pc):
+        return any(a <= pc < b for a, b in ok)
+    return gauntlet(mk, rom_at_e000=False, exec_ok=exec_ok)
 
 
-def gauntlet(mk_machine, rom_at_e000: bool):
+def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
     """Settle, nudge, then judge -- the full obstacle course a shelf entry
     must survive, with every check named after the game that taught it:
 
@@ -201,7 +240,8 @@ def gauntlet(mk_machine, rom_at_e000: bool):
         for _ in range(n):
             cpu.step()
             pc = cpu.pc
-            if pc >= 0xC000 and (pc < 0xE000 or not rom_at_e000):
+            if pc >= 0xC000 and (pc < 0xE000 or not rom_at_e000) \
+                    and not (exec_ok and exec_ok(pc)):
                 vram_hits += 1
                 if vram_hits > 50_000:
                     return 'executes VRAM'
@@ -374,9 +414,9 @@ def _audition_one(job):
         got, why = rip_turbo(prog, monitors)
         if got is None:
             return name, src, f'turbo rip failed: {why}', None
-        image, load, exec_, regs, mon_name, screen = got
+        image, load, exec_, regs, mon_name, screen, high = got
         verdict, lit, bus = verify_cold(image, load, exec_, regs, monit3,
-                                        screen)
+                                        screen, high)
         if bus is not None:
             screenshot(bus, out / "shots" / f"{tag}.png")
         if verdict != 'PASS' and name.strip() in _POOL['trust']:
@@ -398,6 +438,12 @@ def _audition_one(job):
             ent["screen"] = {"file": f"verified/{tag}.scr",
                              "load": f"0x{s0:04X}"}
             note = f', {len(sdata)} B screen'
+        if high is not None:
+            h0, hdata = high
+            (out / "verified" / f"{tag}.hi").write_bytes(hdata)
+            ent["high"] = {"file": f"verified/{tag}.hi",
+                           "load": f"0x{h0:04X}"}
+            note += f', {len(hdata)} B high'
         return name, src, (f'{verdict.split(" ")[0]} (turbo via '
                            f'{mon_name}, {lit} lit, {len(image)} B at '
                            f'{load:04X}, exec {exec_:04X}{note})'), ent

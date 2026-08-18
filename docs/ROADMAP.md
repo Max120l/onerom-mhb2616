@@ -178,9 +178,10 @@ plus a SYSTEM directory (BASICs, both test cards, the module scanner,
 the banner), each submenu just another menu page with a BACK entry.
 Pages beyond the hotspot row's 32 are named by a **two-touch
 protocol**: a read of module 3FD8h+j latches a bank (no rebuild, ~20 ms
-grace for the board's poll), the 3FE0h+n commit selects page j*32+n and
-resets the latch -- so every single-touch stub written before the
-extension still means pages 0-31.  Verified end to end from a true
+grace for the board's poll), the 3FE0h+n commit selects page j*32+n;
+the latch persists across commits, and a stub that never touches the
+bank row stays in bank 0 -- so every single-touch stub written before
+the extension still means pages 0-31.  Verified end to end from a true
 cold boot: reset vector, mirror map, the monitor initializing itself
 and booting the menu, a directory, a game four bank-switches deep on
 page 106, BACK, BASIC-G through SYSTEM, the scanner grading BASIC on
@@ -195,12 +196,43 @@ hardware the day it was built.  The beacon RAM test and the CPU ladder
 stay monitor-socket images by design -- they exist for machines too
 broken to reach a menu.
 
-Remaining, in rising ambition: the ~30 hold-out turbo loaders
-(JETPAC, VLAK, PSSST, TETRIS+4, the MANIC two-part family among them
--- their readers stall on framing that the leader-restored and
-keypress-nudged variants do not fix); composite pages (a BASIC plus
-the module software it loads, e.g. `wurmi`/`kli2`, which have no boot
-stub of their own); more than 16 entries per menu.
+Then a second archive arrived -- the pmd85emu collection's editors,
+assemblers, graphics and music software plus more games -- and the
+census tripled: **262 programs auditioned, 68 through the gauntlet**
+(70 shipped, counting the three bench-attested).  The stubborn turbo
+hold-outs fell to two rip generalizations.  *Entry candidates*: the
+"+4" family's header start field is not its entry -- the loader
+enters at its own first DI instruction -- so the rip tries the header
+start plus the first three DI offsets in the body.  *A widened
+handoff*: a loader may hand control off above 9000h (SABOTER's second
+stage runs at 7189h with code parked beside the VRAM), so the rip
+accepts any handoff outside the monitor's 8000h window once the tape
+drains.  Together they rescued SABOTER, JETPAC, PSSST, VLAK, TETRIS+4
+and LEMMINGS in one stroke.  The bench also taught the rip that
+loaders write above the program body (BOULDER DASH's movement table
+at BFD8h -- the robot faced every direction and moved in none until
+the 9000h-BFFFh writes shipped as a third segment).
+
+Everything no longer fits one flash, so the shelf ships as **two
+images** behind the same two-level menu, each with an identical
+SYSTEM directory (both BASICs, both test cards, the module scanner,
+the banner, and FLASH CHECK with its own baked sum table):
+`MULTILOAD-games` -- the verified games shelf under alphabetical
+directories, 125 pages, 2009 KB of the 2048 -- and `MULTILOAD-apps`
+-- MORE GAMES plus EDITORS, GRAPHICS, DEVELOP (with the MRS2
+assembler module) and MUSIC directories, 73 pages, 1177 KB.  Each
+image is
+emulator-verified from a true cold boot before its firmware builds:
+every directory opens and BACKs, BASIC-G boots through SYSTEM, and
+FLASH CHECK sweeps every page clean.
+
+Remaining, in rising ambition: the last turbo hold-outs (the MANIC
+two-part family caps out with tape still unread; FLAPPY+4 and kin
+stall at 8A3xh with the tape already empty -- a trailing-padding
+variant might free them cheaply; MUSICA and DAM stop at 8BCEh with
+bytes left); composite pages (a BASIC plus the module software it
+loads, e.g. `wurmi`/`kli2`, which have no boot stub of their own);
+more than 16 entries per menu.
 
 ## Parked
 

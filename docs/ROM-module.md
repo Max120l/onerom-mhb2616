@@ -539,6 +539,20 @@ bench taught them:
   monit1's 4 KB as cargo at `8000h` in a native boot, where that
   region is plain RAM (v2 boots refuse the combination — the overlay
   would overwrite the 8C00h reader mid-copy).
+- **Loaders write above the program, too.**  BOULDER DASH's loader
+  drops a 24-byte movement table at `BFD8h` — far above the game body,
+  invisible to a rip that stops at `8000h`.  On the bench the robot
+  faced every direction and moved in none.  The rip now captures
+  loader writes in `9000h–BFFFh` as a third segment (steering clear of
+  stage-2's own `B000h–B1F0h`), shipped like the screen.
+- **The header's start field is not always the entry.**  The "+4"
+  turbo family (SABOTER, JETPAC, PSSST, VLAK, TETRIS+4, LEMMINGS)
+  enters at its own first `DI` instruction, not the header address —
+  and may hand control off *above* `9000h` (SABOTER's second stage
+  runs at `7189h` with code parked up beside the VRAM).  The rip tries
+  the header start plus the first three `DI` offsets in the body, and
+  accepts a handoff anywhere outside the monitor's `8000h–8FFFh`
+  window once the tape is drained.
 
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire
