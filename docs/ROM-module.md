@@ -553,6 +553,23 @@ bench taught them:
   the header start plus the first three `DI` offsets in the body, and
   accepts a handoff anywhere outside the monitor's `8000h–8FFFh`
   window once the tape is drained.
+- **A monitor-cargo game needs its whole machine, not just its
+  monitor.**  On the PMD 85-1 the monitor sits at `8000h` and
+  `E000h–FFFFh` is plain *readable* VRAM — -1 games read the screen
+  there (BOULDER DASH keeps its playfield in it; its menu is drawn by
+  read-modify-write).  A native -3 boot leaves monit3B mapped over
+  those reads, so every one returned ROM bytes: half of BOULDER's menu
+  painted itself out of the monitor's code (garbage from the screen's
+  midline down — line 128 *is* `E000h`), and the robot turned in place
+  but never moved, its collision checks reading ROM junk as walls.
+  CROSFIRE showed the identical half-screen garbage.  Stage-2 now
+  drops PC4 by BSR (`MVI A,08h / OUT F7h` — AllRAM) for every overlay
+  entry, after the last chunk read (the `EC00h` reader is itself that
+  ROM) and before the jump; hardware reset re-maps the ROM, so the
+  menu still returns on a power cycle.  The cold verify had the ROM
+  mapped too and still passed — these games only read through `E000h`
+  once they draw menus or move, one more class that only ever showed
+  on the bench.
 
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire

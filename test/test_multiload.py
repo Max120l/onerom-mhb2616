@@ -320,6 +320,45 @@ def test_multipage_binary_boots_across_page_switches(tmp_path):
                 f"switch {k}: only {later[0] - t} clocks of silence"
 
 
+def test_overlay_game_drops_to_allram(tmp_path):
+    # A game with monitor cargo at 8000h is a PMD 85-1 program, and on
+    # that machine E000-FFFF is plain readable VRAM.  Stage-2 must
+    # unmap the -3 ROM before the jump -- BOULDER DASH painted half its
+    # menu out of monit3B's bytes and its robot read ROM junk as walls
+    # -- but only after the last chunk, because the EC00h reader it
+    # pages chunks with is itself that ROM.
+    payload = bytes((i * 13 + 7) & 0xFF for i in range(0x6000))
+    ov = bytes((i * 3 + 1) & 0xFF for i in range(0x800))
+    (tmp_path / "game.bin").write_bytes(payload)
+    (tmp_path / "cargo.bin").write_bytes(ov)
+    pages, _ = ml.build_pages(
+        [{"type": "binary", "name": "OVG", "file": "game.bin",
+          "load": "0x1000", "exec": "0x1000",
+          "overlay": {"file": "cargo.bin", "at": "0x8000"}}], tmp_path)
+    bus = Bus(fake_monitor(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    bus.press(0, 2)                               # key "1"
+    # ROM must still be mapped while stage-2 reads chunks through EC00h
+    assert run_until_pc(cpu, ml.STAGE2_ORG, 8_000_000), "stage-2 not entered"
+    assert bus.rom_visible, "ROM unmapped before the chunk reads"
+    assert run_until_pc(cpu, 0x1000, 20_000_000), "overlay game never entered"
+    assert not bus.rom_visible, "overlay game entered with the -3 ROM mapped"
+    assert bytes(bus.ram[0x1000:0x1000 + len(payload)]) == payload
+    assert bytes(bus.ram[0x8000:0x8000 + len(ov)]) == ov
+
+    # ...and a plain native binary keeps the monitor: it may call E000h.
+    pages, _ = ml.build_pages(
+        [{"type": "binary", "name": "PLAIN", "file": "game.bin",
+          "load": "0x1000", "exec": "0x1000"}], tmp_path)
+    bus = Bus(fake_monitor(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    bus.press(0, 2)
+    assert run_until_pc(cpu, 0x1000, 20_000_000), "plain binary never entered"
+    assert bus.rom_visible, "a native game without cargo lost its monitor"
+
+
 def test_willy2_boots_through_the_compat_monitor():
     # The full prize chain, against the real ROM: menu -> key -> hotspot ->
     # JMP FFF0 -> the -3 relocates its own -2 monitor -> CD stub -> stage-2

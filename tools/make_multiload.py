@@ -461,7 +461,8 @@ STAGE2_SP = 0xB1F0                # stage-2's own stack, beside its code
 
 
 def build_stage2(chunks: list, exec_: int, v2: bool,
-                 regs: dict | None = None) -> bytes:
+                 regs: dict | None = None,
+                 allram: bool = False) -> bytes:
     """The chunk loader for a multi-page cartridge: for each (page, src,
     count, dest), page in and block-read; then set up the machine state the
     program expects and jump.  Runs at STAGE2_ORG, calls the monitor's
@@ -525,6 +526,20 @@ def build_stage2(chunks: list, exec_: int, v2: bool,
         a.call(routine)
         a.db(src & 0xFF, src >> 8, count & 0xFF, count >> 8,
              dest & 0xFF, dest >> 8)
+    if allram:
+        # A game born on a machine whose monitor is not at E000h reads
+        # the top of VRAM through E000-FFFF -- on the PMD 85-1 that
+        # region is plain readable screen.  With the -3 monitor mapped,
+        # every such read returns ROM bytes: BOULDER DASH painted half
+        # its menu from monit3B's code and its robot could turn but
+        # never move (the playfield lives in VRAM, and collision reads
+        # saw ROM junk as walls).  Drop PC4 by BSR -- one line, no other
+        # latches touched -- AFTER the last chunk read above, because
+        # the EC00h reader is itself monitor ROM.  Reset re-maps the ROM
+        # in hardware, so the menu still comes back on a power cycle.
+        assert not v2, "v2 boots are already AllRAM after FFF0h"
+        a.mvi(A, 0x08)
+        a.out(0xF7)
     if regs:
         a.lxi(RP_B, (regs['b'] << 8) | regs['c'])
         a.lxi(RP_D, (regs['d'] << 8) | regs['e'])
@@ -546,7 +561,8 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
                      first_page: int, v2: bool,
                      regs: dict | None = None,
                      screen: tuple | None = None,
-                     high: tuple | None = None) -> list:
+                     high: tuple | None = None,
+                     allram: bool = False) -> list:
     """Pages for a binary too big for one page.  Page 1: stub + stage-2 +
     first chunk; continuation pages: raw chunks packed tight.  `screen` is
     an optional (vram_addr, bytes) second segment -- the loading screen a
@@ -589,7 +605,7 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
             off += n
             src0 += n
     stage2 = build_stage2([(p, s, c, d) for p, s, c, d, _ in chunks],
-                          exec_, v2, regs)
+                          exec_, v2, regs, allram)
     sig = 0xCD if v2 else 0xCC
     stub = bytearray(boot_stub(PAYLOAD_BASE, ec_count(len(stage2)),
                                STAGE2_ORG, STAGE2_ORG))
@@ -700,8 +716,17 @@ def build_pages(entries: list, root: Path) -> tuple:
             # the multi-page and register-restore cases, but the small
             # singles too, because stage-2 is where the clean-room clear
             # lives, and a verified-in-zero-RAM program deserves zero RAM.
+            # An overlay marks a game from an earlier machine generation:
+            # its monitor cargo sits at 8000h and the -3 ROM at E000h is
+            # a stranger to it, so stage-2 also drops to AllRAM before
+            # the jump ("allram": false opts out explicitly).
+            allram = bool(ent.get("allram", "overlay" in ent))
+            if allram and v2:
+                raise SystemExit(f"error: {name}: allram is native-only "
+                                 f"(a v2 boot ends AllRAM already)")
             pages.extend(multipage_binary(payload, load, exec_, what,
-                                          page_no, v2, regs, screen, high))
+                                          page_no, v2, regs, screen, high,
+                                          allram))
         elif kind == "demo":
             payload, load, exec_ = build_demo()
             pages.append(page_from_binary(payload, load, exec_, "demo"))

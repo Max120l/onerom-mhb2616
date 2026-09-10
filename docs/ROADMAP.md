@@ -226,6 +226,15 @@ emulator-verified from a true cold boot before its firmware builds:
 every directory opens and BACKs, BASIC-G boots through SYSTEM, and
 FLASH CHECK sweeps every page clean.
 
+The bench then found the last class the emulator's cold verify could
+not: the four monitor-cargo games (BOULDER DASH, CROSFIRE, COBRA,
+RESCUER) drew half-garbage menus and BOULDER's robot turned without
+moving -- they are PMD 85-1 programs that read the top half of the
+screen through E000h-FFFFh, plain readable VRAM on their machine but
+monit3B's ROM on ours.  Stage-2 now drops to AllRAM before jumping
+into any overlay entry; the full story is an earned check in
+docs/ROM-module.md.
+
 Remaining, in rising ambition: the last turbo hold-outs (the MANIC
 two-part family caps out with tape still unread; FLAPPY+4 and kin
 stall at 8A3xh with the tape already empty -- a trailing-padding
