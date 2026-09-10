@@ -22,14 +22,14 @@ def run_gen(tmp_path, *args):
     return res, out
 
 
-def parse_banks(text):
-    """The four 2048-byte banks back out of the generated C."""
+def parse_banks(text, count=4):
+    """The 2048-byte banks back out of the generated C."""
     body = text[text.index("mhb_banks"):]
     body = "\n".join(l for l in body.splitlines() if not l.strip().startswith("//"))
     rows = re.findall(r"0x([0-9A-F]{2})\b", body)
     data = bytes(int(h, 16) for h in rows)
-    assert len(data) == 4 * 2048
-    return [data[b * 2048:(b + 1) * 2048] for b in range(4)]
+    assert len(data) == count * 2048
+    return [data[b * 2048:(b + 1) * 2048] for b in range(count)]
 
 
 def parse_present(text):
@@ -164,5 +164,118 @@ def test_identify_rejects_garbage(tmp_path):
     junk = tmp_path / "junk.bin"
     junk.write_bytes(bytes((i * 251 + 17) & 0xFF for i in range(2048)))
     res = run_checksum("--identify", ref, junk)
+    assert res.returncode == 1
+    assert "no clear match" in res.stdout
+
+
+def test_module_split_is_eight_banks(tmp_path):
+    # The module window is 16 KB, not the monitor's 8 -- a full-window image
+    # must come out as eight banks all present, in address order.
+    image = bytes((i * 37 + 11) & 0xFF for i in range(16384))
+    src = tmp_path / "full.rmm"
+    src.write_bytes(image)
+    res, out = run_gen(tmp_path, "--module", str(src))
+    assert res.returncode == 0, res.stdout + res.stderr
+    text = out.read_text()
+    assert parse_present(text) == 0xFF
+    banks = parse_banks(text, count=8)
+    for b in range(8):
+        assert banks[b] == image[b * 2048:(b + 1) * 2048], f"bank {b}"
+
+
+def test_module_short_image_marks_the_rest_absent(tmp_path):
+    # BASIC-G 3.0's shape: 10 KB into a 16 KB window.  The five banks it
+    # reaches are present; the three it does not are absent, so the board
+    # leaves them reading 0xFF as an empty module socket does.  The final
+    # bank is partial and must still be present -- the machine may read past
+    # the image, and padding is data, not absence.
+    image = bytes((i * 13 + 5) & 0xFF for i in range(10240))
+    src = tmp_path / "basic3.rmm"
+    src.write_bytes(image)
+    res, out = run_gen(tmp_path, "--module", str(src))
+    assert res.returncode == 0, res.stdout + res.stderr
+    text = out.read_text()
+    assert parse_present(text) == 0x1F
+    banks = parse_banks(text, count=8)
+    for b in range(5):
+        assert banks[b] == image[b * 2048:(b + 1) * 2048], f"bank {b}"
+    for b in range(5, 8):
+        assert banks[b] == bytes([0xFF]) * 2048, f"bank {b} should be filler"
+
+
+def test_module_image_asserts_its_bank_count(tmp_path):
+    # A module image compiled into a monitor firmware must fail loudly.  The
+    # generated static assert is the whole guard, so its presence is worth a
+    # test of its own.
+    src = tmp_path / "small.rmm"
+    src.write_bytes(bytes(2048))
+    _, out = run_gen(tmp_path, "--module", str(src))
+    assert "_Static_assert(MHB_BANKS == 8" in out.read_text()
+    res, out4 = run_gen(tmp_path, "--selftest")
+    assert res.returncode == 0
+    assert "_Static_assert(MHB_BANKS == 4" in out4.read_text()
+
+
+def test_module_rejects_an_oversized_image(tmp_path):
+    src = tmp_path / "big.rmm"
+    src.write_bytes(bytes(16385))
+    res, _ = run_gen(tmp_path, "--module", str(src))
+    assert res.returncode == 1
+    assert "16384" in res.stderr
+
+
+def test_identify_by_bit_decay(tmp_path):
+    # Past ~25% of bytes wrong every bank looks equally unlike the dump, so
+    # the byte count gives up.  Bits do not: this chip keeps one byte in 23
+    # and reads 00 everywhere else, which is hopeless to match by bytes and
+    # still names its bank outright.
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+    wreck = tmp_path / "wreck.bin"
+    wreck.write_bytes(bytes(b if i % 23 == 0 else 0
+                            for i, b in enumerate(banks[3])))
+    res = run_checksum("--identify", ref, wreck)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "-> bank 3, from" in res.stdout
+    assert "surviving bits alone" in res.stdout
+
+
+def test_identify_by_bit_decay_the_other_direction(tmp_path):
+    # The mirror failure -- a part rotting towards FF rather than 00.  Same
+    # reasoning, opposite polarity, and the tool must say which it saw.
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+    wreck = tmp_path / "wreck.bin"
+    wreck.write_bytes(bytes(b if i % 23 == 0 else 0xFF
+                            for i, b in enumerate(banks[2])))
+    res = run_checksum("--identify", ref, wreck)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "gaining set bits" in res.stdout
+    assert "-> bank 2, from" in res.stdout
+
+
+def test_identify_refuses_a_chip_with_too_little_left(tmp_path):
+    # Consistent with exactly one bank, but on so few surviving bits that
+    # agreement could be luck.  Naming it anyway is the failure mode this
+    # threshold exists to prevent.
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(bytes([0x01]) * 2048 + bytes([0x02]) * 2048)
+    faint = tmp_path / "faint.bin"
+    faint.write_bytes(bytes(0x01 if i < 3 else 0 for i in range(2048)))
+    res = run_checksum("--identify", ref, faint)
+    assert res.returncode == 1
+    assert "too little to name it" in res.stdout
+
+
+def test_identify_refuses_a_chip_with_nothing_left(tmp_path):
+    # All-zero matches every bank trivially; that is not an identification.
+    banks = _distinct_banks()
+    ref = tmp_path / "ref.bin"
+    ref.write_bytes(b"".join(banks))
+    dead = tmp_path / "dead.bin"
+    dead.write_bytes(bytes(2048))
+    res = run_checksum("--identify", ref, dead)
     assert res.returncode == 1
     assert "no clear match" in res.stdout

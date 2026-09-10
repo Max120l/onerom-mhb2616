@@ -89,6 +89,160 @@ between monitor variants (stock, patched, diagnostic) without reflashing.
 Design constraint recorded now: hotspots default to 0x7F4–0x7F7 of the
 window, so hotspot-aware images must keep those four bytes free.
 
+## ~~8. MODULE: the BASIC ROM module from one board~~ — PASSED
+
+**Question: does the board serve a card it was never designed for?
+Answer: yes, all ten blocks.**
+
+`MHB_BANK_SOURCE=MODULE`, three flying leads to the module's own 7442 and
+pin 21 freed from the +5 V rail. The scanner lights the B3 row completely:
+all ten 1 KB blocks of BASIC-G 3.0 correct, read the way the machine reads
+them — through the connector, the module's 8255 and its decode — from one
+board in place of five chips, of which this machine physically has four.
+The missing chip is served like any other.
+
+It took two passes. The first crossed the X1 and X2 leads, which is the
+fault worth remembering because it does not look like one: every block read
+correct and only their *order* was wrong. Both readings from the run are in
+docs/ROM-module.md, along with the sum-column table that names each wiring
+fault without counting boxes.
+
+Independent of rungs 4–6: a different card, whose faults cannot mask theirs.
+
+## ~~9. A boot menu in the module~~ — PASSED on hardware
+
+**Question: can the module carry a shelf of programs behind a menu?
+Answer: yes — 2026-08-08, same day as rung 8.** Menu up at power-on,
+BASIC-G 3.0 and the test cartridge both booting from their keys, reset
+and power-cycle semantics as designed.
+
+`tools/make_multiload.py` builds it: page 0 a generated menu (keyboard
+matrix scan, names rendered from the font), every other page a cartridge —
+`basic3.rmm` verbatim, or a raw binary wrapped in a boot stub of its own.
+Selection touches a hotspot (a live read of module `0x3FE0+n` names page
+*n*), sits out the board's rebuild, and then replays the monitor's own
+`E02D` boot against the new page — so BASIC boots through its stock stub,
+byte-identical to a cartridge swap. Reset relaunches the mapped cartridge,
+exactly as a real module would; power cycle returns to the menu.
+
+The emulator run covers: the menu loading and rendering, a keypress
+booting BASIC through its own two-stage dance, a raw-binary cartridge
+booting, reset semantics, the unbootable-page fallback, and the delay
+contract measured on the bus clock — against a monitor reconstructed
+instruction-for-instruction from the disassembly, which is itself a test
+of the ABI reading. Details in docs/ROM-module.md.
+
+Since the hardware pass, the shelf also reaches back a generation:
+`rmm2` entries boot PMD 85-2 modules through the -3 monitor's own
+`JMP FFF0h` compatibility switch — no firmware change, one menu action.
+Confirmed on hardware the same day: BASIC 2A boots from its key,
+the machine relocating itself into a PMD 85-2 mid-menu.
+
+Both of the next two rungs landed together after a games archive
+arrived: **multi-page cartridges** (a generated stage-2 pages chunks in
+through the same touch-and-wait contract, `Jet Set Willy` at 30.7 KB
+being the customer) and **tape entries** (`.ptp` programs shelved by
+name; the -2-environment ones boot through FFF0h). Host-tested through
+the real ROM end to end -- menu key to Willy's title screen.
+
+The turbo-loader wall then fell to the PCHL/SPHL emulator fix: the
+factory rips loaders against real monitor images, captures the handoff
+register file, and cold-verifies each extraction exactly as the shelf
+boots it.
+
+The first shipped census (34 of 90) then met real hardware, and two
+rounds of bench testing taught the factory most of what it now knows
+-- the full list of earned checks lives in docs/ROM-module.md.  Round
+one found the sentinel-prefill corruption (479 bytes across 18 games:
+MAGICIAN's crashed start key, ARKANOID's mangled sprites, BOULDER
+DASH's deaf keyboard).  Round two found the incomplete multi-part
+captures (BLUDISTE, CERES-01, TANK, TVARE -- first stages that stream
+the rest from tape, unshippable), the dirty-RAM crashes that only
+happen after a menu boot (JERRY, ONA A DUCH, MESTO -- fixed by the
+stage-2 clean room), the games that index their birth monitor's key
+tables (CROSFIRE, COBRA -- fixed by shipping monit1 as cargo), and
+the fact that turbo loaders' painted VRAM is content the shelf was
+dropping (ARKANOID's mothership, BOULDER DASH's instructions -- now
+captured and shipped as a second load segment).
+
+The standing census: **42 shelf-worthy of 90** -- 39 through the
+gauntlet plus three bench-attested over its objection -- across five
+volumes, including five games (GALAXIA, SPACE RAID, RESCUER, REVERZ,
+HLIPA) unlocked by modeling the idle tape port as the noisy open
+input it really is.
+
+Then the volumes merged.  The **omnibus** carries all 40 shelved games
+plus the diagnostics on one board -- 119 pages, 1.91 MB of the
+RP2354A's 2 MB -- behind a two-level menu: alphabetical directories
+plus a SYSTEM directory (BASICs, both test cards, the module scanner,
+the banner), each submenu just another menu page with a BACK entry.
+Pages beyond the hotspot row's 32 are named by a **two-touch
+protocol**: a read of module 3FD8h+j latches a bank (no rebuild, ~20 ms
+grace for the board's poll), the 3FE0h+n commit selects page j*32+n;
+the latch persists across commits, and a stub that never touches the
+bank row stays in bank 0 -- so every single-touch stub written before
+the extension still means pages 0-31.  Verified end to end from a true
+cold boot: reset vector, mirror map, the monitor initializing itself
+and booting the menu, a directory, a game four bank-switches deep on
+page 106, BACK, BASIC-G through SYSTEM, the scanner grading BASIC on
+its relocated page.
+
+A fifth volume carries the diagnostics: shelf editions of the screen
+test card (twice, marching complementary ranges 2000-BFFF and
+0000-9FFF, since a RAM-resident march cannot cover its own feet) and
+the module scanner (hotspot-swaps the window to the BASIC page, grades
+it live; block F stops short of the live hotspot bytes).  Confirmed on
+hardware the day it was built.  The beacon RAM test and the CPU ladder
+stay monitor-socket images by design -- they exist for machines too
+broken to reach a menu.
+
+Then a second archive arrived -- the pmd85emu collection's editors,
+assemblers, graphics and music software plus more games -- and the
+census tripled: **262 programs auditioned, 68 through the gauntlet**
+(70 shipped, counting the three bench-attested).  The stubborn turbo
+hold-outs fell to two rip generalizations.  *Entry candidates*: the
+"+4" family's header start field is not its entry -- the loader
+enters at its own first DI instruction -- so the rip tries the header
+start plus the first three DI offsets in the body.  *A widened
+handoff*: a loader may hand control off above 9000h (SABOTER's second
+stage runs at 7189h with code parked beside the VRAM), so the rip
+accepts any handoff outside the monitor's 8000h window once the tape
+drains.  Together they rescued SABOTER, JETPAC, PSSST, VLAK, TETRIS+4
+and LEMMINGS in one stroke.  The bench also taught the rip that
+loaders write above the program body (BOULDER DASH's movement table
+at BFD8h -- the robot faced every direction and moved in none until
+the 9000h-BFFFh writes shipped as a third segment).
+
+Everything no longer fits one flash, so the shelf ships as **two
+images** behind the same two-level menu, each with an identical
+SYSTEM directory (both BASICs, both test cards, the module scanner,
+the banner, and FLASH CHECK with its own baked sum table):
+`MULTILOAD-games` -- the verified games shelf under alphabetical
+directories, 125 pages, 2009 KB of the 2048 -- and `MULTILOAD-apps`
+-- MORE GAMES plus EDITORS, GRAPHICS, DEVELOP (with the MRS2
+assembler module) and MUSIC directories, 73 pages, 1177 KB.  Each
+image is
+emulator-verified from a true cold boot before its firmware builds:
+every directory opens and BACKs, BASIC-G boots through SYSTEM, and
+FLASH CHECK sweeps every page clean.
+
+The bench then found the last class the emulator's cold verify could
+not: the four monitor-cargo games (BOULDER DASH, CROSFIRE, COBRA,
+RESCUER) drew half-garbage menus and BOULDER's robot turned without
+moving -- they are PMD 85-1 programs that read the top half of the
+screen through E000h-FFFFh, plain readable VRAM on their machine but
+monit3B's ROM on ours.  Stage-2 now drops to AllRAM before jumping
+into any overlay entry; the full story is an earned check in
+docs/ROM-module.md.
+
+Remaining, in rising ambition: the last turbo hold-outs (the MANIC
+two-part family caps out with tape still unread; FLAPPY+4 and kin
+stall at 8A3xh with the tape already empty -- a trailing-padding
+variant might free them cheaply; MUSICA and DAM stop at 8BCEh with
+bytes left); composite pages (a BASIC plus the module software it
+loads, e.g. `wurmi`/`kli2`, which have no boot stub of their own);
+more than 16 entries per menu.
+
 ## Parked
 
 - **Upstreaming to One ROM.** A "2616 in the PMD 85-3" chip type — /CS on

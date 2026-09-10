@@ -136,6 +136,23 @@ FONT = {
     "T": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
     "-": [".....", ".....", ".....", "#####", ".....", ".....", "....."],
     " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
+    # The rest of the alphabet, added when the multiload menu started
+    # rendering arbitrary entry names.  Same 5x7 conventions as above.
+    "J": ["....#", "....#", "....#", "....#", "....#", "#...#", ".###."],
+    "K": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+    "N": ["#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"],
+    "Q": [".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"],
+    "V": ["#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."],
+    "W": ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
+    "X": ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+    "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+    "Z": ["#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"],
+    ".": [".....", ".....", ".....", ".....", ".....", "..##.", "..##."],
+    ",": [".....", ".....", ".....", ".....", "..##.", "..#..", ".#..."],
+    ":": [".....", "..##.", "..##.", ".....", "..##.", "..##.", "....."],
+    "/": ["....#", "....#", "...#.", "..#..", ".#...", "#....", "#...."],
+    "!": ["..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."],
+    "?": [".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."],
 }
 
 
@@ -264,17 +281,24 @@ def emit_boxes(a: Asm, tag: str, line: int) -> None:
             a.mov(M, E)
 
 
-def emit_march(a: Asm, ram_top: int) -> None:
-    """March C- over 0000..(ram_top<<8)-1, one pass.  B accumulates the
-    failing bits and the pass continues -- the screen wants the whole
+def emit_march(a: Asm, ram_top: int, lo_page: int = 0) -> None:
+    """March C- over (lo_page<<8)..(ram_top<<8)-1, one pass.  B accumulates
+    the failing bits and the pass continues -- the screen wants the whole
     picture, not the first casualty.  A progress segment fills after each
     element.  No branches on faults inside the loops: XRI of the expected
-    value IS the fault mask, and OR-ing zero into B is free."""
+    value IS the fault mask, and OR-ing zero into B is free.
+
+    lo_page exists for the shelf editions, which run from RAM inside the
+    region a monitor-socket build would march: each card marches the
+    contiguous range that excludes its own footprint, and two cards with
+    complementary ranges cover all of 0000-BFFF between them."""
+    lo = lo_page << 8
+    lo_end = (lo_page - 1) & 0xFF               # down-loops stop here
     top = (ram_top << 8) - 1
 
     # -- element 0: immediate write/read-back (the hard-fault control) ----
     a.mvi(B, 0x00)
-    a.lxi(RP_H, 0x0000)
+    a.lxi(RP_H, lo)
     a.label("imm")
     a.mvi(M, 0xAA); a.mov(A, M); a.xri(0xAA); a.ora(B); a.mov(B, A)
     a.mvi(M, 0x55); a.mov(A, M); a.xri(0x55); a.ora(B); a.mov(B, A)
@@ -291,7 +315,7 @@ def emit_march(a: Asm, ram_top: int) -> None:
 
     # -- element 1: write 0 everywhere ------------------------------------
     a.mvi(B, 0x00)                              # march bits start clean
-    a.lxi(RP_H, 0x0000)
+    a.lxi(RP_H, lo)
     a.label("m0")
     a.mvi(M, 0x00); a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("m0")
     emit_bar_segment(a, 1)
@@ -301,7 +325,7 @@ def emit_march(a: Asm, ram_top: int) -> None:
             (("m1", False, 0xFF, False), ("m2", True, 0x00, False),
              ("m3", False, 0xFF, True), ("m4", True, 0x00, True)),
             start=2):
-        a.lxi(RP_H, top if down else 0x0000)
+        a.lxi(RP_H, top if down else lo)
         a.label(tag)
         a.mov(A, M)
         if expect_one:
@@ -309,62 +333,68 @@ def emit_march(a: Asm, ram_top: int) -> None:
         a.ora(B); a.mov(B, A)
         a.mvi(M, write)
         if down:
-            a.dcx(RP_H); a.mov(A, H); a.cpi(0xFF); a.jnz(tag)
+            a.dcx(RP_H); a.mov(A, H); a.cpi(lo_end); a.jnz(tag)
         else:
             a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz(tag)
         emit_bar_segment(a, seg)
 
     # -- element 6: final read of 0 ---------------------------------------
-    a.lxi(RP_H, 0x0000)
+    a.lxi(RP_H, lo)
     a.label("m5")
     a.mov(A, M); a.ora(B); a.mov(B, A)
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("m5")
     emit_bar_segment(a, 6)
 
     # -- element 7: address uniqueness, H xor L ---------------------------
-    a.lxi(RP_H, 0x0000)
+    a.lxi(RP_H, lo)
     a.label("au0")
     a.mov(A, H); a.xra(L); a.mov(M, A)
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("au0")
-    a.lxi(RP_H, 0x0000)
+    a.lxi(RP_H, lo)
     a.label("au1")
     a.mov(A, H); a.xra(L); a.xra(M); a.ora(B); a.mov(B, A)
     a.inx(RP_H); a.mov(A, H); a.cpi(ram_top); a.jnz("au1")
     emit_bar_segment(a, 7)
 
 
-def emit(a: Asm, ram_top: int, data: dict) -> None:
+def emit(a: Asm, ram_top: int, data: dict, lo_page: int = 0,
+         shelf: bool = False) -> None:
     a.di()
     a.beacon(0)
 
-    # ---- the proven paging trampoline (see docs/PMD85-3.md) --------------
-    a.lxi(RP_H, 0x0000)
-    a.mvi(M, 0x5A)
-    a.lxi(RP_H, "tramp")
-    a.mvi(C, 3)
-    a.label("tcopy")
-    a.mov(A, M)
-    a.mov(M, A)
-    a.inx(RP_H)
-    a.dcr(C)
-    a.jnz("tcopy")
-    a.mvi(B, 0x09)
-    a.mvi(A, 0x82)
-    a.out(0xF7)                                 # ROM leaves the address space
-    a.label("tramp")
-    a.mov(A, B)
-    a.out(0xF7)                                 # ...and returns
+    if not shelf:
+        # ---- the proven paging trampoline (see docs/PMD85-3.md) ----------
+        # Monitor-socket build only: a shelf edition is booted by the menu,
+        # which means the mirror map ended long before this code ran -- and
+        # the trampoline's probe byte at 0000h would land on the LOW card's
+        # own first instruction.
+        a.lxi(RP_H, 0x0000)
+        a.mvi(M, 0x5A)
+        a.lxi(RP_H, "tramp")
+        a.mvi(C, 3)
+        a.label("tcopy")
+        a.mov(A, M)
+        a.mov(M, A)
+        a.inx(RP_H)
+        a.dcr(C)
+        a.jnz("tcopy")
+        a.mvi(B, 0x09)
+        a.mvi(A, 0x82)
+        a.out(0xF7)                             # ROM leaves the address space
+        a.label("tramp")
+        a.mov(A, B)
+        a.out(0xF7)                             # ...and returns
 
-    a.lxi(RP_H, 0x0000)
-    a.mov(A, M)
-    a.cpi(0xC3)
-    a.jnz("mapok")
-    # Mirror never cleared.  Paint the verdict -- the screen works even
-    # under the mirror, writes always went to RAM -- and park.
-    emit_strip(a, "sf", LN_VERDICT, data["fail"])
-    a.label("stuck")
-    a.jmp("stuck")
-    a.label("mapok")
+        a.lxi(RP_H, 0x0000)
+        a.mov(A, M)
+        a.cpi(0xC3)
+        a.jnz("mapok")
+        # Mirror never cleared.  Paint the verdict -- the screen works even
+        # under the mirror, writes always went to RAM -- and park.
+        emit_strip(a, "sf", LN_VERDICT, data["fail"])
+        a.label("stuck")
+        a.jmp("stuck")
+        a.label("mapok")
     a.beacon(1)
 
     # ---- clear the whole frame, C000-FFFF --------------------------------
@@ -409,7 +439,7 @@ def emit(a: Asm, ram_top: int, data: dict) -> None:
         emit_fill(a, f"bc{r}", vaddr(LN_BAR + r, BAR_COL0), 0x00,
                   BAR_SEGS * BAR_SEGW)
 
-    emit_march(a, ram_top)
+    emit_march(a, ram_top, lo_page)
     a.beacon(2)
 
     # LED channel: march fault flag and bits.
@@ -467,6 +497,20 @@ def emit(a: Asm, ram_top: int, data: dict) -> None:
     a.jmp("pass")
 
 
+def card_strips(march_text: str = "MARCH C- RAM TEST") -> dict:
+    return {
+        "title": render_strip([(6, "PMD 85-3 TEST CARD")]),
+        "march": render_strip([(6, march_text)]),
+        "hard": render_strip([(1, "HARD")]),
+        "mbox": render_strip([(1, "MARCH")]),
+        "digits": render_strip([(BOX_COL0 + 5 * i, str(i))
+                                for i in range(8)]),
+        "pass": render_strip([(21, "PASS")]),
+        "fail": render_strip([(21, "FAIL")], attr=2),
+        "grad": gradient_strip(),
+    }
+
+
 def build(ram_top: int = RAM_TOP) -> bytes:
     rom = bytearray(b"\x00" * ROM_SIZE)
 
@@ -476,17 +520,7 @@ def build(ram_top: int = RAM_TOP) -> bytes:
 
     # Data strips live between the program and the beacon page.
     DATA_OFF = 0x1200
-    strips = {
-        "title": render_strip([(6, "PMD 85-3 TEST CARD")]),
-        "march": render_strip([(6, "MARCH C- RAM TEST")]),
-        "hard": render_strip([(1, "HARD")]),
-        "mbox": render_strip([(1, "MARCH")]),
-        "digits": render_strip([(BOX_COL0 + 5 * i, str(i))
-                                for i in range(8)]),
-        "pass": render_strip([(21, "PASS")]),
-        "fail": render_strip([(21, "FAIL")], attr=2),
-        "grad": gradient_strip(),
-    }
+    strips = card_strips()
     data_addrs = {}
     off = DATA_OFF
     for name, blob in strips.items():
@@ -505,6 +539,43 @@ def build(ram_top: int = RAM_TOP) -> bytes:
     for i in range(32):
         rom[BEACON_OFF + i] = 0xE5
     return bytes(rom)
+
+
+def build_shelf(org: int, lo_page: int, ram_top: int) -> bytes:
+    """The test card as a multiload cartridge: same picture, same march,
+    but running from RAM inside the region a monitor build would test.
+    The march range excludes the card's own footprint; the card names
+    its range on screen so the two complementary editions (LOW at 0000h
+    marching 2000-BFFF, HIGH at A000h marching 0000-9FFF) are telling
+    the truth about what they cover.  Together they march every byte of
+    0000-BFFF, and the picture is the VRAM test, as ever."""
+    DATA_OFF = 0x1200
+    text = f"MARCH C- {lo_page << 8:04X}-{(ram_top << 8) - 1:04X}"
+    strips = card_strips(text)
+    img = bytearray(DATA_OFF)
+    data_addrs = {}
+    off = DATA_OFF
+    for name, blob in strips.items():
+        img.extend(blob)
+        data_addrs[name] = org + off
+        off += len(blob)
+
+    head = Asm(org)
+    head.jmp(org + ENTRY)
+    img[0:len(head.buf)] = head.link()
+
+    a = Asm(org + ENTRY)
+    emit(a, ram_top, data_addrs, lo_page, shelf=True)
+    body = a.link()
+    assert ENTRY + len(body) <= DATA_OFF, \
+        f"program overruns the data region: {len(body)} bytes"
+    img[ENTRY:ENTRY + len(body)] = body
+
+    lo, hi = org >> 8, (org + len(img) + 0xFF) >> 8
+    inside = not (hi <= lo_page or lo >= ram_top)
+    assert not inside, (f"card at {org:04X}-{org + len(img) - 1:04X} sits "
+                        f"inside its own march range")
+    return bytes(img)
 
 
 def main() -> int:

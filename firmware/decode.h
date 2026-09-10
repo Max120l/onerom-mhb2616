@@ -23,6 +23,12 @@
 //
 //   HOTSPOT switches whole banks at runtime, which a baked table cannot
 //   express; it keeps four 8-bit tables and a mask compare for gating.
+//
+// MODULE serves a different board entirely: the BASIC ROM module, DOSKA ROM
+// PAMATI 1 PK 280 53, whose sockets are plain JEDEC 2716 and whose bank
+// select lives on the module's own 7442 rather than on any socket pin.  It
+// reuses the 16-bit table unchanged in shape, because there too every input
+// to the drive decision fits inside the index.  See docs/ROM-module.md.
 
 #ifndef DECODE_H
 #define DECODE_H
@@ -119,6 +125,106 @@ typedef struct {
 // in a machine that means the real chip for that bank keeps its socket.
 void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
                      uint8_t present, const mhb_lut16_cfg_t *cfg);
+
+// ---------------------------------------------------------------------------
+// MODULE mode: the BASIC ROM module's 16 KB window
+// ---------------------------------------------------------------------------
+
+// The module's sockets carry A0-A10 and nothing else of the address; A11-A13
+// are the 7442's three inputs, A14 is stolen for the read strobe, and A15
+// parks the decoder.  So the window is 16 KB in eight 2 KB banks, and the
+// board learns the bank from the decoder's inputs rather than its outputs --
+// three leads instead of five, which is what makes it fit.
+#define MHB_MODULE_BANKS  8
+
+// Where each of those lands.  Three leads, and the strobe is already in the
+// socket.  Full wiring in docs/ROM-module.md.
+//
+//   socket pin 20   /OE    the module's read strobe (PC6)   -- no lead
+//   socket pin 21   A11    from IO2 pin 15 (PC3)            -- FREE PIN 21
+//   X1 pad          A12    from IO2 pin 14 (PC4)
+//   X2 pad          A13    from IO2 pin 13 (PC5)
+//   socket pin 18   park   from IO2 pin 12 (PC7)            -- OPTIONAL
+//
+// Pin 21 is on the card's +5 V rail (measured; the schematic does not draw
+// it), so it must be freed before PC3 can drive it -- lift the board's pin
+// 21, or cut the feed at that socket.  Forgetting leaves A11 stuck high and
+// the board answering for odd banks only.
+//
+// The park lead is optional because the monitor's park raises PC7 and PC6
+// in one store (MVI A,FFh / OUT FAh at monit3B EC2D), so the strobe gate
+// already covers it.  PC7 can only matter on its own for a read of module
+// address 0x8000 and up with the strobe still low -- which nothing does,
+// the window being 16 KB.  Without the lead, socket pin 18 stays in the
+// socket carrying a /CSn the decode simply ignores, and no board-side
+// modification is needed at all.
+//
+// The three address leads are pulled UP in MODULE builds, so a harness that
+// has come off reads bank 7.  That is silence for any image which does not
+// fill the window -- and the reason a full 16 KB image should wire the park
+// lead: bank 7 present means a detached harness serves bank 7 instead.
+#define MHB_IDX_MOD_nOE   MHB_IDX_nCS
+#define MHB_IDX_MOD_A11   MHB_IDX_PIN21
+#define MHB_IDX_MOD_A12   MHB_IDX_X1
+#define MHB_IDX_MOD_A13   MHB_IDX_X2
+#define MHB_IDX_MOD_PARK  MHB_IDX_PR
+
+// Eight banks need three bits where the monitor modes needed two, so MODULE
+// entries carry the bank in bits 9-11 and never set a beacon -- bit 11 is
+// the beacon field's low bit, and the two cannot coexist in one entry.  No
+// build uses both: beacons report from code running in the CPU's address
+// space, and the module is not in it.  The host test asserts the overlap
+// stays theoretical by checking MODULE entries never set bits 12-15.
+#define MHB_LUT16_MOD_BANK_SHIFT  9
+#define MHB_LUT16_MOD_BANK_MASK   (7u << MHB_LUT16_MOD_BANK_SHIFT)
+
+// ---------------------------------------------------------------------------
+// Multiload: page switching over the module window
+// ---------------------------------------------------------------------------
+
+// A multiload image is up to 32 pages of 16 KB, and the machine names the
+// one it wants by reading a hotspot: a live read (/OE low) of bank 7,
+// in-bank address 0x7E0 + n, selects page n.  The window's own top 32
+// bytes are therefore control registers, never payload -- the pack tool
+// keeps them free in every page, because the hotspots must be reachable
+// from every page or a switch could strand the machine.
+//
+// The serve loop answers a hotspot read like any other (the byte under it
+// is padding) and records the index; core 0 rebuilds the table from the
+// named page.  The machine-side contract is in docs/ROM-module.md: touch
+// the hotspot, then leave the module alone for 300 ms before trusting a
+// read, which covers detection plus rebuild several times over.
+#define MHB_LUT16_HOTSPOT         0x1000u
+#define MHB_MODULE_HOTSPOT_BASE   0x7E0u    // in-bank, bank 7: commit row
+#define MHB_MODULE_BANKSEL_BASE   0x7D8u    // in-bank, bank 7: bank latch
+#define MHB_MODULE_MAX_PAGES      256u      // 8 banks x 32 commits
+//
+// Two-touch extension: a live read of 0x7D8+j (module 0x3FD8+j) latches
+// bank j without switching anything; the 0x7E0+n commit then selects page
+// j*32+n and resets the latch.  A plain single touch therefore still
+// means pages 0-31, and every stub written before the extension keeps
+// working.  The machine gives the bank touch ~20 ms before the commit so
+// core 0's poll consumes it first; only the commit pays the rebuild
+// delay.
+
+// Set the hotspot flag on the entries the machine can trigger.  Run after
+// every (re)build -- the builder writes whole entries and clears it.  With
+// the park lead only park-low reads can trigger; without it pin 18 is a
+// /CSn swinging freely, so both its states carry the flag.
+void mhb_mark_module_hotspots(uint16_t *lut, bool use_park);
+
+// Fill the table for MODULE mode.  `banks` must hold MHB_MODULE_BANKS banks;
+// `present` marks which of them carry image data.  Absent banks are never
+// driven, so the machine reads them as the floating bus does -- 0xFF, which
+// is exactly what an unpopulated module socket gives it.
+//
+// `use_park` says whether socket pin 18 carries PC7 by rewiring.  With it,
+// the board is faithful to the card it replaces at every address.  Without
+// it, pin 18 carries a /CSn and is ignored, and the board differs from the
+// original only above module 0x8000 with the strobe low -- an address
+// combination the machine never produces.
+void mhb_build_lut16_module(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
+                            uint8_t present, bool use_park);
 
 // ---------------------------------------------------------------------------
 // The 8-bit-entry table: HOTSPOT mode

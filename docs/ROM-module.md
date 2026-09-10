@@ -1,0 +1,603 @@
+# The BASIC ROM module: the board, its sockets, and its dead chips
+
+The PMD 85-3's BASIC lives on a separate card — the ROM PACK — that plugs
+into the machine's module connector rather than into the memory map. This
+file covers the **card**: how its sockets are wired, what its logic does,
+and what its chips turned out to hold. The **host** side — the ports the
+machine reads it through, and the on-screen scanner that grades it — is in
+[PMD85-3.md](PMD85-3.md#the-rom-module-and-its-scanner).
+
+Read this one *after* [MHB2616.md](MHB2616.md), and read it as a
+correction: the monitor sockets on the CPU board repurpose the 2616's two
+select pins in a way that is specific to that board, and it is natural to
+carry that model across. It does not apply here. This card uses the same
+chip conventionally.
+
+## The board
+
+**DOSKA ROM PAMÄTÍ, 1 PK 280 53, pre typ PMD 85-3.** Sixteen 24-pin socket
+positions drawn in two rows of eight, an 8255 (IO1), a 7442 BCD decoder
+(IO2), and — on the schematic — a hex inverter (IO19) and a transistor
+switching the sockets' Vcc. The sheet carries the note *"osadiť iba pozície
+uvedené v rozpiske"*: populate only the positions named in the parts list.
+It is a universal layout, stuffed per variant, because the 1 KB builds
+(BASIC-G 1.0 and 2.0, nine chips) and the 2 KB build (3.0, five chips)
+share one PCB.
+
+**Measured on the board in hand: the two rows are paired, and each pair
+shares a chip select.** Eight selects, eight sockets fitted. So the card has
+eight 2 KB *slots*, not sixteen — the sixteen drawn positions are two
+footprints per slot, and a slot holds one chip. That matches the window
+arithmetic below from the other direction: eight slots × 2 KB = the 16 KB
+the address lines can reach.
+
+## Socket wiring
+
+Identical across all sixteen positions. Read off the schematic, with pin 20
+confirmed by continuity on the board in hand:
+
+| socket pin | function | driven by |
+|------------|----------|-----------|
+| 1–8 | A7…A0 | PB7…PB0 |
+| 23, 22, 19 | A8, A9, A10 | PC0, PC1, PC2 |
+| 9, 10, 11, 13–17 | D0–D7 | PA0–PA7 |
+| 18 | **/CE** | /CSn from the 7442 |
+| 20 | **/OE** | PC6 |
+| **21** | **+5 V** | a trace running under the sockets — *measured; the schematic does not draw it* |
+| 12, 24 | GND, Vcc | ground and the +5 V rail |
+
+That is plain JEDEC 2716: both selects active low and both required, pin 21
+strapped to the rail exactly as the CPU board straps it. The schematic shows
+nothing on pin 21, which is a reminder to buzz the pins that "obviously"
+carry nothing — the trace runs under the sockets where a sheet is least
+likely to record it and an eye is least likely to find it. Nothing like the CPU board's PR-as-A11 and pair-/CS arrangement.
+
+That is also an independent confirmation of the 2616's select sense.
+MHB2616.md settles PR as active low from the archive's per-chip socket
+assignment; this card reaches the same answer from the other end, since a
+part that works *here* must have pin 18 and pin 20 as active-low selects
+that AND together. Two boards, two arguments, one conclusion: the 2616 is
+a conventional two-select ROM, used unconventionally on the CPU board
+rather than an odd part used naturally.
+
+## As built, against as drawn
+
+**Measured on one board — the schematic is the superset and other builds
+may differ.**
+
+- **IO19 is not fitted.** Its footprint is jumpered, so PC6 reaches every
+  socket's pin 20 directly, active low. On the schematic PC6 passes through
+  an IO19 section with R1 pulling its output up.
+- **The Vcc-switching transistor and its gate chain are not fitted.** The
+  sockets sit on the +5 V rail permanently; there is no power gating and no
+  settling delay on select.
+
+One consequence worth checking on any given board: with the inverter
+bypassed, **R1 now sits on the PC6 net itself**, where it is the only thing
+holding `/OE` deasserted between reset and the first time firmware
+programs the 8255 — at reset the 8255's ports are inputs, so PC6 is
+high-Z. If R1 was pulled along with IO19, `/OE` floats in that window.
+Benign as far as anything here can tell (port A is an input then too, so
+there is nothing to contend with), but it is the kind of detail that
+explains an intermittent later.
+
+## The decode
+
+The 7442 takes PC3, PC4, PC5 on A, B, C and PC7 on D, and drives
+`/CS0`…`/CS7`. So the low three bits of the bank number select a socket,
+and PC7 high parks all eight outputs — the module's own enable.
+
+The module image begins at offset 0 (`basic3.txt`: *"umiestnenie v ROM
+module od adresy 0000h"*), which makes the socket order fall straight out:
+
+| select | module offset | BASIC-G 3.0 block |
+|--------|---------------|-------------------|
+| /CS0 | 0x0000–0x07FF | basic3-1 |
+| /CS1 | 0x0800–0x0FFF | basic3-2 |
+| /CS2 | 0x1000–0x17FF | basic3-3 |
+| /CS3 | 0x1800–0x1FFF | basic3-4 |
+| /CS4 | 0x2000–0x27FF | basic3-5 |
+
+Worth stating plainly because it is the thing dumping the chips was
+supposed to establish: **the schematic gives you the socket order, so a
+module can be rebuilt without reading a single original chip.**
+
+## The chips, identified from wreckage
+
+This machine's module carries four chips where BASIC-G 3.0 wants five, and
+all four are dead the way every MHB 2616 in this machine has died: mostly
+zeros, a scatter of surviving set bits. Dumped through a programmer, none
+of them matches anything — against the reference blocks each differs in
+about 950 of 2048 bytes, which is the distance between two unrelated
+things.
+
+They are all identifiable anyway, because **a chip dying this way loses set
+bits and never gains them.** A dump of block B can therefore hold no bit
+that B does not also hold, and the count of such impossible bits is zero
+for exactly one block and hundreds for every other. `rom_checksum.py
+--identify` runs this automatically once the byte count has given up:
+
+| dump | block | surviving bits | of the block's | next-best block |
+|------|-------|----------------|----------------|-----------------|
+| rom1 | basic3-1 | 1295 | 7664 (16.9%) | 663 impossible |
+| rom2 | basic3-2 | 244 | 7895 (3.1%) | 118 impossible |
+| rom3 | basic3-3 | 181 | 7528 (2.4%) | 92 impossible |
+| rom4 | basic3-4 | 32 | 7481 (0.4%) | 17 impossible |
+
+The fourth chip is named from 32 bits out of 16384 — four hundredths of the
+die — and the identification is not close. The dumps also came off in
+socket order, which the method did not know and which corroborates it.
+`basic3-5` is the chip the module is missing.
+
+Two things this is worth remembering for:
+
+- **Byte counts and bit counts fail at very different depths.** Comparing
+  bytes stops discriminating at about a quarter of them wrong; comparing
+  bits in the direction the decay runs keeps working to within a fraction of
+  a percent of total loss. The test that fails is not evidence the chip is
+  unidentifiable.
+- **An asymmetric failure is more informative than a symmetric one.** The
+  whole method rests on knowing decay has a direction. Symmetric noise —
+  a floating bus, a bad contact — would carry no such structure, and
+  distinguishing the two is exactly what tells a dead chip from a bad read.
+
+## The boot contract
+
+**Read off `monit3B.rom` by disassembly; since confirmed on hardware**
+-- every multiload boot exercises the whole contract live: the E02D
+read, the CCh signature, EC00h's inline arguments and count+1
+transfer, the held strobe, the park.
+
+Two things had to be established before anything could be served here, and
+both are in the monitor rather than on the card.
+
+**The ports are aliased.** The module's 8255 answers at `88h–8Bh` in every
+description of the machine, and the monitor never touches those addresses.
+It uses **`F8h–FBh`**, which the module's own decode (`port & 8Ch == 88h`)
+maps to the same chip: `F8h` port A (data in), `F9h` port B (address low),
+`FAh` port C (address high), `FBh` control. The system 8255 at `F4h–F7h`
+sits just below and does *not* match that decode. Searching a monitor for
+`88h` finds nothing and proves nothing.
+
+**The block-read routine is at `EC00h`**, and it takes its arguments inline
+after the `CALL`: source address (2), byte count (2), destination (2). It
+programs the 8255 with `90h` — port A input, B and C output — writes the
+address, then reads bytes with the strobe *held*, incrementing the address
+through the ports themselves. It ends with `MVI A,FFh / OUT FAh`, which
+parks the card: that single store raises PC7 (decoder off) and PC6 (`/OE`
+off) together, and it is why the firmware treats both as gates.
+
+That the strobe is held rather than pulsed per byte is the detail the serve
+loop depends on. The board gates on a level, exactly as the chip did.
+
+### The module gets to run its own code at boot
+
+At `E02D`, in the reset path, the monitor does this:
+
+```
+E02D  CD 00 EC   CALL EC00h        ; block read...
+      00 00                        ;   from module 0x0000
+      0D 00                        ;   count field 0x000D
+      B2 C1                        ;   to RAM C1B2
+E036  3A B2 C1   LDA C1B2h
+E039  FE CC      CPI CCh           ; signature?
+E03B  CA B2 C1   JZ  C1B2h         ; ...then execute it
+```
+
+**The module's first bytes are copied into RAM and jumped to if the first is
+`CCh`.** Fourteen of them, not thirteen: the loop pre-increments the count's
+high byte (`INR B`) and then tests only that byte, so it transfers
+`count + 1`. Worth pinning down rather than reading off the field, because
+it is the size of the budget a module gets to bootstrap itself in.
+
+BASIC-G 3.0 spends twelve of the fourteen: 
+
+```
+CC 00 EC        CZ EC00h      ; signature AND instruction
+00 24 01 04 00 B8             ;   module 0x2400, 1 KB, to B800
+C3 00 B8        JMP B800h     ; run what was just loaded
+```
+
+The signature byte is doing double duty and it is worth admiring: `CCh` is
+`CZ`, call-if-zero, and the Z flag is guaranteed set because the very `CPI
+CCh` that validated the signature set it. So the byte that identifies the
+module is also the instruction that bootstraps it. The stub copies its
+second stage to `B800h` — the 1 KB at `B800h` that `basic3.txt` documents as
+BASIC's second destination — and jumps in.
+
+The consequence is larger than BASIC: **a ROM module chooses what the
+machine runs, in thirteen bytes, with the monitor's own loader available at
+`EC00h` to pull in as much more as it wants.** Anything that fits the window
+can be booted this way. See ROADMAP.md for what that opens up.
+
+## Substituting 2732s
+
+**Untested on hardware; the reasoning is from the wiring above.**
+
+The 2732 differs from the 2716 in exactly one pin: 21 is A11 rather than
+Vpp. This card ties pin 21 to +5 V, so a 2732 dropped in reads A11 high
+permanently and behaves as the 2 KB ROM the slot wants — **burn the block at
+0x800**, the top half of the device. Nothing else needs doing: `/CE` from
+the 7442 and `/OE` from PC6 are both active low and both required, which is
+2732 read behaviour unchanged.
+
+Burning the block into **both** halves costs nothing and is worth it anyway:
+the same image then works in this card, in a card that leaves pin 21 open,
+and in the CPU board's monitor sockets, without anyone having to remember
+which is which.
+
+Everything else drops in: `/CE` from the 7442 and `/OE` from PC6 are both
+active low and both required, which is 2732 read behaviour unchanged.
+
+- **Speed grade is irrelevant.** Reads here are software-mediated through
+  the module's 8255 — write the address to ports B and C, read port A back
+  — so a byte takes microseconds. The slowest NMOS part will do.
+- **Standby current is the real change.** `/CE` per socket keeps four of
+  five chips idle, but NMOS 2732 standby is tens of milliamps each against
+  a mask ROM's far less, and this board has no Vcc gating to help. CMOS
+  27C32 if there is a choice.
+
+## Serving the whole module from one board
+
+`MHB_BANK_SOURCE=MODULE`. **Built and host-tested; not yet run on
+hardware.** A board in any one socket already sees A0–A10, `/OE` on pin 20
+and the data bus. What it cannot see is which *other* socket an access is
+for — and the cheap way to learn that is to read the 7442's three address
+inputs rather than its five outputs.
+
+| board input | socket pin | carries | lead from |
+|-------------|-----------|---------|-----------|
+| `GPIO_nCS` | 20 | `/OE`, the read strobe | — already in the socket |
+| `GPIO_PIN21` | 21 | module A11 | IO2 pin 15 (PC3) |
+| `GPIO_X1` | — | module A12 | IO2 pin 14 (PC4) |
+| `GPIO_X2` | — | module A13 | IO2 pin 13 (PC5) |
+| `GPIO_PR` | 18 | park (A15) | IO2 pin 12 (PC7) — **optional** |
+
+**Three leads, and one pin to free.** X1 and X2 take two of them with no
+argument — they are bare pads with nothing else on them. The third has to
+land on a socket pin, and both candidates are already carrying something:
+pin 21 is on the +5 V rail and pin 18 is a `/CSn`.
+
+Pin 21 is the one to take. Nothing on this card needs it — a 2616 ignores
+pin 21 entirely — whereas pin 18 is a live select shared with the slot's
+other footprint. Two ways, and the first is better:
+
+- **Lift the board's pin 21** so it never meets the rail, and solder PC3's
+  lead to it directly. The card stays original; the modification is to the
+  One ROM board, which is the cheap and replaceable half.
+- **Cut pin 21's +5 V feed at the chosen socket** and wire PC3 to the freed
+  pad. Only if you would rather not touch the board — and note the trace
+  runs under the sockets, so check whether cutting it also strands pin 21 on
+  the sockets downstream. That costs nothing today and costs a 2732
+  conversion later.
+
+Pin 18 stays in its socket either way, carrying a `/CSn` this mode ignores.
+
+**Do not simply plug in and wire PC3 to pin 21 without freeing it** — that
+drives an 8255 output into the 5 V rail. The failure if you forget is
+readable rather than dangerous: pin 21 reads high always, so module A11 is
+stuck at 1, the board answers only for odd banks, and BASIC never loads.
+
+#### Why the park lead is optional
+
+It looks essential and is not, and the reason is worth keeping. The monitor
+ends every block read with `MVI A,FFh / OUT FAh` — a single store to port C
+that raises PC7 (decoder off) **and PC6 (`/OE` off) together**. Every park
+the machine actually performs is therefore already caught by the strobe
+gate.
+
+PC7 could only matter on its own for a read of module address 0x8000 or
+above *with the strobe still low*, and nothing produces that: the window is
+16 KB, so the address never reaches A15. Wiring PC7 buys faithfulness at an
+address the machine cannot ask for.
+
+There is one case where it earns itself, below. Fit it with
+`-DMHB_MODULE_PARK_LEAD=ON`, socket pin 18 rewired from its `/CSn` to the
+8255's PC7.
+
+#### What a detached lead does
+
+The three address leads are **pulled up**, so a harness that has come off
+reads bank 7. For any image that does not fill the window that bank is
+absent, the board stays silent, and the pixel stays red: a broken wire gives
+nothing rather than the wrong byte. `test_module_detached_harness` asserts
+it in both wirings.
+
+**A full 16 KB image breaks that property**, because bank 7 is then present
+and a detached harness serves it. That is when the park lead earns itself:
+with pin 18 rewired, a detached park lead reads "parked" and silences the
+board whatever the image holds. A test asserts both halves, including the
+uncomfortable one — that without the lead, nothing silences a full window.
+
+One board therefore answers for all five chips, including the one this
+module is missing, and the module's microsecond access times leave the serve
+loop nothing to worry about.
+
+### Reading the scanner's verdict on the wiring
+
+Run `tools/make_moduletest.py`'s image from a monitor socket with the board
+in the module and the sums name the fault outright. Ignore the version-row
+boxes for this — counting them is error-prone, and the sum column is
+unambiguous. Against BASIC-G 3.0, whose good reading is
+`C2E1 EF51 EE09 D0AF CA94 A092 94AB F05F E1A1 E13D` then empty:
+
+| symptom in the sums | fault |
+|---------------------|-------|
+| values repeat in **pairs** (`EE09 D0AF EE09 D0AF`) | A11 stuck high — pin 21 still on +5 V |
+| rows 0–3 and 4–7 are **identical groups of four** | A12 stuck high — X1 lead open |
+| every value appears **twice consecutively** | A10 stuck high — socket pin 19, not one of our leads |
+| all ten present but **out of order** | two bank leads crossed |
+
+The last one is the one this project actually hit, and it is worth knowing
+that it looks nothing like a failure: every block reads correct, so nothing
+is "wrong" anywhere, and only the *order* gives it away. Blocks 4,5 holding
+what belongs at 8,9 and vice versa is A12 and A13 swapped — the X1 and X2
+leads crossed.
+
+### Undriven does not read 0xFF here
+
+**Measured.** Where a bank is absent and the board does not drive, this
+machine reads the module bus as **0x00**, so an unserved 1 KB block sums to
+`0000` and not the `FC00` a floating bus would give. The emulator's model
+(from `RomModule.cpp`) returns `0xFF` for an empty slot, and PMD85-3.md's
+scanner notes say `FC00` means a floating bus; both are describing a module
+that is *absent or dead*, which is a different condition from a module
+present with nothing driving this address. Do not read `0000` as a fault:
+on this card it is the correct signature of a bank the board is right not
+to answer for.
+
+## Multiload: a boot menu and a shelf of cartridges
+
+`MHB_MODULE_MULTILOAD=ON`, image from `tools/make_multiload.py`.
+**PASSED on hardware, 2026-08-08** -- menu at power-on, BASIC-G 3.0
+and the test cartridge booting from their keys, reset and power-cycle
+semantics as designed; the `rmm2` path confirmed the same day, BASIC
+2A booting through the machine's own FFF0h switch.
+
+The boot contract above makes the module the machine's boot device, and
+multiload uses it twice. The board's flash holds up to 32 *pages* of
+16 KB. Page 0 is a menu: its stub loads a small program to `B000h` that
+draws the shelf and scans the keyboard matrix directly (column out on
+`F4h`, rows in on `F5h`, active low). Every other page is a cartridge —
+either a verbatim module image booted exactly as the machine would boot
+the real module, or a raw program wrapped in a fourteen-byte stub of its
+own.
+
+**The hotspot protocol.** A live read (`/OE` low) of module address
+`0x3FE0 + n` switches the board to page *n*. The window's top 32 bytes
+are therefore control registers on *every* page — they must be, since a
+switch must be reachable from wherever the machine currently is — and
+the pack tool refuses payload there. The serve loop flags those entries
+in the LUT and core 0 rebuilds the table from the named page; the
+machine's side of the contract is to touch the hotspot and then leave
+the module alone for **300 ms** (the menu's delay loop; the board's
+worst case is ~70 ms). The emulator holds the menu to that contract by
+measuring the gap on the bus clock, not by inspecting the delay loop.
+
+**Selection is a replay of the machine's own boot.** The menu touches
+the hotspot, waits, then inlines the monitor's `E02D` sequence — read
+fourteen bytes to `C1B2`, `CPI CCh`, jump in. BASIC therefore boots
+through its own stock stub, byte-identical to a real cartridge swap,
+second-stage quirks included (the stock stub reads 1026 bytes of a
+block that ends two short; the pack tool pads rmm pages with `0x00` so
+even the over-read matches this machine's measured undriven bus).
+
+**Reset semantics fall out rather than being designed.** The monitor
+boots whatever page is mapped, so reset relaunches the current
+cartridge — exactly what a really-plugged module does — and a power
+cycle returns the board to page 0, the menu. (The module is powered
+from the machine, so a machine power cycle is a board reboot.)
+
+**The stack during boot replay** sits at `E000h`, pushing into the
+invisible margin of VRAM line 127 — the same margin trick the monitor
+itself uses for its variables — so a cartridge may load anywhere in
+`0000–BFFF` without the loader's stack in its way.
+
+**PMD 85-2 cartridges ride the machine's own compatibility switch.** The
+-3 monitor's `JMP FFF0h` is a documented way into PMD 85-2 mode, and what
+it actually does (disassembled, then executed in the emulator) is worth
+admiring: it copies the monitor's own first 4 KB down into RAM at `8000h`
+and runs a table-driven relocation over it — `E0xx` address bytes become
+`80xx`, and the module-boot check itself is rewritten from `CALL EC00h /
+CPI CCh` to `CALL 8C00h / CPI CDh`. The -2 monitor is *embedded in the
+-3's*, manufactured on demand; diffed against the archive's real dumps it
+is monit2B-lineage (76 bytes apart, against 210–313 for the others). That
+also closes a loose end from the shelf work: -2 module stubs open with
+`CALL 8C00h` because `EC00h − 6000h = 8C00h`, the same block-read routine
+at its relocated address, same ABI to the byte.
+
+So an `rmm2` entry needs no firmware change at all: the menu touches the
+page's hotspot, waits, and jumps `FFF0h` instead of replaying `E02D`. The
+-3 monitor relocates itself, lands at `8000h`, goes AllRAM through its own
+(relocated) trampoline, finds the `CDh` stub on the mapped page at `802D`,
+and boots it by the full -2 convention. The emulator runs that entire
+chain against the real monit3B — menu keypress to BASIC 2A's first
+instruction at `0000h`, 9204 payload bytes verified.
+
+Reset from a -2 cartridge is the one asymmetry: the -3 monitor reads
+`CDh`, refuses it, and falls to its prompt with the page still mapped —
+where `JUMP FFF0` relaunches the cartridge by hand. A power cycle returns
+to the menu, as ever.
+
+Manifest, and what the tool enforces:
+
+```json
+{"name": "shelf",
+ "entries": [
+   {"type": "rmm",    "name": "BASIC-G 3.0", "file": "basic3.rmm"},
+   {"type": "rmm2",   "name": "BASIC 2A",    "file": "basic2A.rmm"},
+   {"type": "binary", "name": "SOME GAME",   "file": "game.bin",
+    "load": "0x2000", "exec": "0x2000"},
+   {"type": "demo",   "name": "TEST CARD"}
+ ]}
+```
+
+- at most 16 entries (keys `1–9`, `0`, `A–F`), 32 pages;
+- an `rmm` must start with `CCh`, an `rmm2` with `CDh` — the tool names
+  the right type when handed the wrong generation. Of the RM-TEAM
+  archive's module images, `basic3.rmm` boots a -3; `basic2.rmm`,
+  `basic2A.rmm`, `mrs2.rmm` and `booter2-pmd85-pmd32.rmm` are `rmm2`
+  material. The rest (`sach1`, `kli2`, `wurmi`, `demo0`…) have no boot
+  stub of either kind — they were loaded by other software, typically
+  BASIC's module commands, and need their native loader on the same page:
+  future work;
+- a binary loads inside `0000–BFFF`; one too big for a page is split
+  automatically — the stub loads a generated stage-2 to `B000h`, which
+  pages chunks in with the same touch-and-wait contract the menu uses
+  and then jumps (so a multi-page cartridge must not load over
+  `B000–B0FF`);
+- `binary` takes `"mode": "v2"` for programs that want the -2
+  environment — the stub gets the `CDh` signature and calls the
+  relocated reader at `8C00h`, and the menu boots the page through
+  `FFF0h`;
+- `tape` shelves a program straight out of a `.ptp` tape archive by
+  name — plain one-block programs only, loaded at the header's start
+  field. Turbo-loader programs (a small body followed by headerless raw
+  blocks) are refused with their structure called out;
+- `demo` generates a self-test cartridge, useful as the shelf's proof.
+
+### Tape games, and what the archive taught
+
+Verified end to end in the emulator against the real ROMs, from the
+ZO Svazarmu 4004/482 collection: **Jet Set Willy** (`WILLY2`) — a
+one-block tape image, `"mode": "v2"`, entry `0000h` — boots from the
+menu through the whole chain: `FFF0h`, the manufactured -2 monitor, a
+two-page chunked load through `8C00h`, title screen drawn. The
+multi-page machinery exists because of it.
+
+The route matters more than the one game: these tape programs call the
+`8000h` monitor, so on a -3 they live in -2 mode — that is *why* the
+collection's model tables list "3" for them, and why the shelf boots
+them through the machine's own switch rather than natively.
+
+Not yet shelved, recorded so the next attempt starts where this one
+stopped: most of the collection uses **turbo loaders** — a small `?`
+body at `7Fxxh` that pulls headerless raw blocks through the monitor's
+tape reader with tightened timing, machine-sniffed via `LDA 8000h /
+CPI C3h` (monit1 begins with `C3h`, the -2 monitors with `31h`).
+Executing the loaders against real monitor images over a byte-level
+USART model recovers memory maps (BLUDISTE, PEXESO, PEXESO2 land
+completely; their cold-entry state is still wrong — the screen draws
+with a stride shear, so the handoff capture is incomplete). HORACE+2
+loads but its entry is not the header field, which holds text.
+PISQORKY and HLIPA stall on their readers' framing.
+`tools/ptp_lib.py` carries the container format.
+
+When a larger corpus arrives, `tools/shelf_factory.py` auditions it
+wholesale: every plain one-block program in a pile of ptps or zips is
+booted in the -2 environment (manufactured via the real FFF0h
+relocation) and then natively, nudged with a few keypresses, and
+judged by whether it draws.  Passers come out as screenshots plus
+ready-to-paste manifest entries; everything else is listed with its
+reason, because a shelf that silently drops games reads as "checked
+everything" when it did not.
+
+The factory's checks were each earned by a shipped game failing on the
+bench after passing every host check of the day.  In the order the
+bench taught them:
+
+- **A write bitmap, not a sentinel.**  A byte still reading `AAh` at
+  handoff might be untouched RAM or sprite data the loader legitimately
+  wrote; the first rig shipped both as `00h`, silently corrupting every
+  extraction containing the sentinel's own value.  MAGICIAN lost 21
+  bytes, one of them the opcode behind its start key.
+- **Watch for HLT while pressing keys.**  A title that draws proves the
+  intro runs and says nothing about the code behind the start key —
+  the gap MAGICIAN's corruption walked through.
+- **"Draws" is not "is the game".**  BLUDISTE's capture was the 8 KB
+  first stage of a multi-part load; CERES-01's was a compilation
+  selector whose four games are not in the corpus; TANK and TVARE ship
+  only their intros, their real content (levels included) streaming
+  from tape.  None of these can ever run from a module.
+- **The idle tape port is noisy, not silent.**  With no tape playing
+  the 8251 hangs off an open audio input, so it clocks garbage frames
+  forever.  A silent model contradicted the bench both ways — KUBANOID
+  polls the port, rejects the junk and plays on; BLUDISTE inhales it
+  and paints the purple static the bench actually shows.  The verifier
+  feeds deterministic noise and judges *behavior*: HLT, executing from
+  VRAM (BLUDISTE's static turned out to be a crashed program running
+  through screen memory), static-like byte distribution, or no draw.
+- **The bench outranks the emulator.**  No single noise stream
+  reproduces every real machine: ATOMIX, SOLITER and KUBANOID play
+  fine on hardware and die under one particular synthetic stream.
+  `--trust NAME` ships a bench-attested game over the gauntlet's
+  objection, with the objection printed in the report.
+- **Loading screens are content.**  Turbo loaders paint VRAM, and games
+  keep it: ARKANOID's mothership title backdrop, BOULDER DASH's only
+  instructions.  The rip captures the written VRAM extent as a second
+  segment; the stage-2 loader ships it into C000-FFFF after the
+  program (its stack moved to B1F0h first, out of the way).
+- **The clean room.**  Every extraction is verified in a zero-RAM
+  machine, but a menu boot hands over RAM full of leftovers — JERRY
+  drew nothing, ONA A DUCH halted, only ever on the bench.  Stage-2
+  now zeroes everything it is not about to fill, minus the relocated
+  monitor in v2 mode and the VRAM margins in every mode (the invisible
+  16 bytes per line are the monitor's live variable space).
+- **Some games need their birth monitor.**  CROSFIRE and COBRA index
+  monit1's keyboard tables at `83F0h`; under the v2 compat monitor
+  every key translated to nothing.  An `overlay` entry option ships
+  monit1's 4 KB as cargo at `8000h` in a native boot, where that
+  region is plain RAM (v2 boots refuse the combination — the overlay
+  would overwrite the 8C00h reader mid-copy).
+- **Loaders write above the program, too.**  BOULDER DASH's loader
+  drops a 24-byte movement table at `BFD8h` — far above the game body,
+  invisible to a rip that stops at `8000h`.  On the bench the robot
+  faced every direction and moved in none.  The rip now captures
+  loader writes in `9000h–BFFFh` as a third segment (steering clear of
+  stage-2's own `B000h–B1F0h`), shipped like the screen.
+- **The header's start field is not always the entry.**  The "+4"
+  turbo family (SABOTER, JETPAC, PSSST, VLAK, TETRIS+4, LEMMINGS)
+  enters at its own first `DI` instruction, not the header address —
+  and may hand control off *above* `9000h` (SABOTER's second stage
+  runs at `7189h` with code parked up beside the VRAM).  The rip tries
+  the header start plus the first three `DI` offsets in the body, and
+  accepts a handoff anywhere outside the monitor's `8000h–8FFFh`
+  window once the tape is drained.
+- **A monitor-cargo game needs its whole machine, not just its
+  monitor.**  On the PMD 85-1 the monitor sits at `8000h` and
+  `E000h–FFFFh` is plain *readable* VRAM — -1 games read the screen
+  there (BOULDER DASH keeps its playfield in it; its menu is drawn by
+  read-modify-write).  A native -3 boot leaves monit3B mapped over
+  those reads, so every one returned ROM bytes: half of BOULDER's menu
+  painted itself out of the monitor's code (garbage from the screen's
+  midline down — line 128 *is* `E000h`), and the robot turned in place
+  but never moved, its collision checks reading ROM junk as walls.
+  CROSFIRE showed the identical half-screen garbage.  Stage-2 now
+  drops PC4 by BSR (`MVI A,08h / OUT F7h` — AllRAM) for every overlay
+  entry, after the last chunk read (the `EC00h` reader is itself that
+  ROM) and before the jump; hardware reset re-maps the ROM, so the
+  menu still returns on a power cycle.  The cold verify had the ROM
+  mapped too and still passed — these games only read through `E000h`
+  once they draw menus or move, one more class that only ever showed
+  on the bench.
+
+One caution: a multiload set fills every bank of every page, so the
+detached-harness safety of a partial image (bank 7 absent, broken wire
+means silence) does not apply. The wiring is proven before multiload
+goes in — the scanner pass — and the park lead restores the property if
+it is ever wanted.
+
+### Building it
+
+```
+cd tools
+./gen_rom_images.py -o ../firmware/rom_images.c --module basic3.rmm
+cd ../firmware && mkdir -p build && cd build
+cmake .. -DMHB_BOARD=FIRE24F -DMHB_BANK_SOURCE=MODULE
+make
+```
+
+The generated image carries a `_Static_assert` on its own bank count, so a
+module image built into a monitor firmware (or the reverse) is a compile
+error naming both numbers rather than a board that serves a quarter of the
+window.
+
+## Sources
+
+- PMD 85-3 ROM module schematic, DOSKA ROM PAMÄTÍ 1 PK 280 53 (sheet in
+  project correspondence; socket wiring, the 7442 decode, and the IO19 and
+  Vcc-switch positions are read directly off it). Deviations as built were
+  reported from the board in hand.
+- [PMD 85 Infoserver, ROM page](https://pmd85.borik.net/wiki/PMD_85_ROM) and
+  the RM-TEAM ROM archive — `RomModul/Basic3`, five 2 KB blocks with the
+  module's own PRIZNAK values in `basic3.txt`.

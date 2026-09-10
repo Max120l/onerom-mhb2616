@@ -157,33 +157,58 @@ def emit_subroutines(a: Asm, hextab: int) -> None:
     a.db(0xC9)                                  # RET
 
 
-def emit(a: Asm, refs: dict, data: dict) -> None:
+def emit_scan15(a: Asm) -> None:
+    # -- scan15: block 15 for the shelf edition -- 3C00h to 3FD7h only.
+    # On multiload firmware the window's last 40 bytes are live control
+    # addresses: 3FE0h+n commits a page switch and 3FD8h+j latches a bank
+    # for the two-touch protocol, so a full-block scan would tear the
+    # shelf out from under itself (or poison the next commit).  The
+    # shortfall is shown honestly: row F's sum covers 984 bytes, and no
+    # BASIC reference row reaches past block 9 anyway.
+    a.label("scan15")
+    a.lxi(RP_D, 0x0000)
+    a.label("s15b")
+    a.mov(A, L); a.out(0x89)
+    a.mov(A, H); a.out(0x8A)
+    a.db(0xDB, 0x88)                            # IN 88h
+    a.mov(C, A)
+    a.mov(A, E); a.add(C); a.mov(E, A)
+    a.mov(A, D); a.aci(0); a.mov(D, A)
+    a.inx(RP_H)
+    a.mov(A, L); a.cpi(0xD8); a.jnz("s15b")
+    a.mov(A, H); a.cpi(0x3F); a.jnz("s15b")     # stop at 3FD8h exactly
+    a.db(0xC9)                                  # RET
+
+
+def emit(a: Asm, refs: dict, data: dict, shelf: bool = False,
+         basic_page: int = 1) -> None:
     a.di()
     a.beacon(0)
 
-    # ---- the proven paging trampoline ------------------------------------
-    a.lxi(RP_H, 0x0000)
-    a.mvi(M, 0x5A)
-    a.lxi(RP_H, "tramp")
-    a.mvi(C, 3)
-    a.label("tcopy")
-    a.mov(A, M)
-    a.mov(M, A)
-    a.inx(RP_H)
-    a.dcr(C)
-    a.jnz("tcopy")
-    a.mvi(B, 0x09)
-    a.mvi(A, 0x82)
-    a.out(0xF7)
-    a.label("tramp")
-    a.mov(A, B)
-    a.out(0xF7)
+    if not shelf:
+        # ---- the proven paging trampoline (monitor-socket build only) ----
+        a.lxi(RP_H, 0x0000)
+        a.mvi(M, 0x5A)
+        a.lxi(RP_H, "tramp")
+        a.mvi(C, 3)
+        a.label("tcopy")
+        a.mov(A, M)
+        a.mov(M, A)
+        a.inx(RP_H)
+        a.dcr(C)
+        a.jnz("tcopy")
+        a.mvi(B, 0x09)
+        a.mvi(A, 0x82)
+        a.out(0xF7)
+        a.label("tramp")
+        a.mov(A, B)
+        a.out(0xF7)
 
-    a.lxi(RP_H, 0x0000)
-    a.mov(A, M)
-    a.cpi(0xC3)
-    a.label("stuck")
-    a.jz("stuck")                               # mirror never cleared: park
+        a.lxi(RP_H, 0x0000)
+        a.mov(A, M)
+        a.cpi(0xC3)
+        a.label("stuck")
+        a.jz("stuck")                           # mirror never cleared: park
     a.beacon(1)
 
     a.lxi(RP_SP, SP_TOP)                        # RAM is certified: a stack
@@ -192,8 +217,27 @@ def emit(a: Asm, refs: dict, data: dict) -> None:
     a.mvi(A, 0x90)
     a.out(0x8B)
 
+    if shelf:
+        # ---- swap the window to the BASIC page ---------------------------
+        # Booted from the shelf, the window currently serves this scanner's
+        # own cartridge page.  A read of 3FE1h is the multiload hotspot for
+        # page 1 -- the diagnostics volume keeps BASIC-G 3.0 as its first
+        # entry precisely so this index is stable -- and after the touch the
+        # board needs its rebuild time, same contract as the menu's.
+        a.mvi(A, 0xE0 | basic_page); a.out(0x89)
+        a.mvi(A, 0x3F); a.out(0x8A)
+        a.db(0xDB, 0x88)                        # IN 88h: the touch
+        a.lxi(RP_B, 0x7000)                     # ~340 ms at 2.048 MHz
+        a.label("hsdel")
+        a.dcx(RP_B)
+        a.mov(A, B)
+        a.ora(C)
+        a.jnz("hsdel")
+
     a.jmp("main")
     emit_subroutines(a, data["hextab"])
+    if shelf:
+        emit_scan15(a)
     a.label("main")
 
     # ---- static card ------------------------------------------------------
@@ -230,7 +274,10 @@ def emit(a: Asm, refs: dict, data: dict) -> None:
     a.label("sweep")
     a.lxi(RP_H, 0x0000)                         # module address
     for i in range(N_BLOCKS):
-        a.db(0xCD); a.a16("scan")               # DE = sum, HL = next block
+        if shelf and i == N_BLOCKS - 1:
+            a.db(0xCD); a.a16("scan15")         # hotspot-safe last block
+        else:
+            a.db(0xCD); a.a16("scan")           # DE = sum, HL = next block
         a.db(0xE5)                              # PUSH H
 
         for pos, (reg, high) in enumerate(((D, True), (D, False),
@@ -310,6 +357,45 @@ def build(refs: dict | None = None) -> bytes:
     for i in range(32):
         rom[BEACON_OFF + i] = 0xE5
     return bytes(rom)
+
+
+def build_shelf(org: int = 0x4000, refs: dict | None = None,
+                basic_page: int = 1) -> bytes:
+    """The scanner as a multiload cartridge.  Same card, two differences a
+    menu boot forces: the window it scans is swapped to the BASIC page
+    first (a hotspot touch -- the volume's first entry must be BASIC-G
+    3.0 so page 1 is the one graded), and block F stops short of the live
+    hotspot bytes.  Reset afterwards boots BASIC, since that is the page
+    left mapped; power-cycle returns to the menu."""
+    refs = REFS if refs is None else refs
+    assert len(refs) <= 4, "four version rows fit on the card"
+    DATA_OFF = 0x1600
+
+    blobs = {"title": render_strip([(5, "BASIC-G MODULE TEST")]),
+             "hextab": hex_table()}
+    for v, name in enumerate(refs):
+        blobs[f"lbl{v}"] = render_strip([(IDX_COL, name)])
+
+    img = bytearray(DATA_OFF)
+    data = {}
+    off = DATA_OFF
+    for name, blob in blobs.items():
+        img.extend(blob)
+        data[name] = org + off
+        off += len(blob)
+
+    head = Asm(org)
+    head.jmp(org + ENTRY)
+    img[0:len(head.buf)] = head.link()
+
+    assert 0 <= basic_page < 32, "single-touch reach only"
+    a = Asm(org + ENTRY)
+    emit(a, refs, data, shelf=True, basic_page=basic_page)
+    body = a.link()
+    assert ENTRY + len(body) <= DATA_OFF, \
+        f"program overruns the data region: {len(body)} bytes"
+    img[ENTRY:ENTRY + len(body)] = body
+    return bytes(img)
 
 
 def main() -> int:
