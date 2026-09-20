@@ -54,7 +54,10 @@ project, for a milder reason: the Fire 24 is treated as a well-documented
 RP2350 carrier board with a known socket-to-GPIO map.
 
 The chip itself, what the schematic settled about its pins, and the caveats
-that remain: [docs/MHB2616.md](docs/MHB2616.md).
+that remain: [docs/MHB2616.md](docs/MHB2616.md). The same chip is wired
+quite differently on the BASIC ROM module — plain JEDEC 2716 there, which
+is both a warning against generalising and an independent confirmation of
+the select senses: [docs/ROM-module.md](docs/ROM-module.md).
 
 ## What the PMD 85-3 does with them
 
@@ -115,7 +118,7 @@ the chip it replaces.
 
 ### The bank sources
 
-One firmware, four answers to "where do the missing address bits come
+One firmware, five answers to "where do the missing address bits come
 from", chosen at build time:
 
 | mode | wires | replaces | how |
@@ -124,6 +127,8 @@ from", chosen at build time:
 | `PAIR` | 0 | two chips | /CS gates, PR *is* the bank bit. The pair-mate must come out. |
 | `FULL8K` | 1 | all four | One flying lead: the other pair's /CS (pin 20 of either empty socket) to the X1 pad. A12 = which select is active, A11 = PR. All three others out. |
 | `HOTSPOT` | 0 | one chip, four images | Reads of four magic addresses switch images — for software written to touch them. **The stock monitor never will**; this mode is for custom/diagnostic ROMs. |
+| `MODULE` | 3 | all five, on a different card | Not a monitor socket: the BASIC ROM module, whose 16 KB window is eight slots behind its own 7442. Three leads bring that decoder's address inputs to the board, one of them onto a freed pin 21; a fourth lead is optional. See [docs/ROM-module.md](docs/ROM-module.md). |
+| `MODULE` + `MULTILOAD` | 3 | all five, plus a boot menu | The same wiring serving up to 32 pages of 16 KB: page 0 a generated menu, every other page a cartridge (BASIC, or raw programs wrapped in boot stubs), switched by hotspot reads. `tools/make_multiload.py`. See [docs/ROM-module.md](docs/ROM-module.md). |
 
 `STATIC` is the default because it is the only mode that is safe no matter
 what else is still in its socket's neighbourhood — it drives exactly when

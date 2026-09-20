@@ -37,6 +37,12 @@
 //   HOTSPOT  Reads of magic addresses in the served window switch between
 //            four images of this socket's bank.  Zero wires; only software
 //            written to touch the hotspots can steer it.
+//   MODULE   Not a monitor socket at all: the BASIC ROM module (DOSKA ROM
+//            PAMATI 1 PK 280 53), whose sockets are plain JEDEC 2716 and
+//            whose 16 KB window is eight 2 KB banks selected by a 7442.
+//            Four leads bring the decoder's own inputs to the board, which
+//            then answers for every socket on the card at once.  See
+//            docs/ROM-module.md.
 //
 // STATIC, PAIR and FULL8K bake the entire drive decision into a 16-bit-entry
 // table (bit 8 = drive), because every input to that decision lives inside
@@ -70,7 +76,8 @@
 #define MHB_SYS_CLK_KHZ  150000
 #endif
 
-#if (MHB_BANK_STATIC + MHB_BANK_PAIR + MHB_BANK_FULL8K + MHB_BANK_HOTSPOT) != 1
+#if (MHB_BANK_STATIC + MHB_BANK_PAIR + MHB_BANK_FULL8K + MHB_BANK_HOTSPOT \
+     + MHB_BANK_MODULE) != 1
 #error "exactly one bank source; use the CMake MHB_BANK_SOURCE option"
 #endif
 
@@ -89,6 +96,33 @@ static volatile uint32_t g_served;
 
 #ifndef MHB_DIAG
 #define MHB_DIAG 0
+#endif
+
+#if MHB_BANK_MODULE && MHB_DIAG
+// The diagnostics assume a monitor socket.  Beacons are reads of reserved
+// addresses by code running in the CPU's address space, and the ROM module
+// is not in it; the coverage build's bank field is two bits wide where
+// MODULE needs three.  Refusing is better than reporting bank 5 as bank 1.
+#error "MHB_DIAG does not apply to MHB_BANK_SOURCE=MODULE"
+#endif
+
+#ifndef MHB_MULTILOAD
+#define MHB_MULTILOAD 0
+#endif
+#if MHB_MULTILOAD && !MHB_BANK_MODULE
+#error "MHB_MULTILOAD is a MODULE-mode feature"
+#endif
+
+#if MHB_MULTILOAD
+// The hotspot index core 1 last saw, or the sentinel.  Written every serve
+// iteration the address is held -- idempotent -- and consumed by core 0,
+// which rebuilds the table from the named page.  The machine's side of the
+// contract (touch, then 300 ms of silence) is what makes the coarse
+// polling here sufficient.
+#define MHB_HS_NONE 0xFFFFFFFFu
+static volatile uint32_t g_hs_seen = MHB_HS_NONE;
+static unsigned g_cur_page;
+static unsigned g_hs_bank;      // two-touch latch; reset on every commit
 #endif
 
 #if MHB_DIAG >= 3
@@ -198,7 +232,23 @@ static void setup_gpio(void) {
     gpio_pull_up(GPIO_X1);
     gpio_init(GPIO_X2);
     gpio_set_dir(GPIO_X2, GPIO_IN);
+#if MHB_BANK_MODULE
+    // MODULE carries module A12/A13 on the pads and A11 on socket pin 21,
+    // all three by flying lead.  Pull them UP: a lead that has come off then
+    // reads bank 7, which no image short of a full window occupies, so the
+    // board goes silent instead of serving the wrong bank and the status
+    // pixel says so by staying red.
+    gpio_pull_up(GPIO_X2);
+    gpio_pull_up(GPIO_PIN21);
+#if MHB_MODULE_PARK_LEAD
+    // Pin 18 rewired to PC7.  Pulled up too, so a detached park lead reads
+    // "decoder parked" -- silence again, and this time whatever the image
+    // fills.
+    gpio_pull_up(GPIO_PR);
+#endif
+#else
     gpio_pull_down(GPIO_X2);
+#endif
 
 #if !MHB_BOARD_HAS_NEOPIXEL
     gpio_init(GPIO_STATUS_LED);
@@ -263,6 +313,19 @@ static void build_tables(void) {
     unsigned bank = MHB_SOCKET_BANK & 3u;
     bool pr_high = ((bank & 1) ^ (MHB_PR_INVERT ? 1u : 0u)) != 0;
     mhb_select_masks(false, pr_high, &g_sel_mask, &g_sel_val);
+#elif MHB_BANK_MODULE
+    // No socket-side configuration at all: the bank arrives on the leads and
+    // the gating is the module's own strobe.  Nothing here is per-socket,
+    // which is the point -- one board answers for the whole card.
+#if MHB_MULTILOAD
+    // Power-on page is 0, the menu.  Every page is fully populated (the
+    // pack tool pads), so present is always 0xFF here.
+    mhb_build_lut16_module(g_lut16, mhb_pages[0], 0xFF, MHB_MODULE_PARK_LEAD);
+    mhb_mark_module_hotspots(g_lut16, MHB_MODULE_PARK_LEAD);
+#else
+    mhb_build_lut16_module(g_lut16, mhb_banks, mhb_bank_present,
+                           MHB_MODULE_PARK_LEAD);
+#endif
 #else
     mhb_lut16_cfg_t cfg = {
         .socket_pair = MHB_SOCKET_PAIR,
@@ -342,6 +405,15 @@ static void __not_in_flash_func(serve_forever)(void) {
                 driving = true;
                 g_served++;
             }
+#if MHB_MULTILOAD
+            // A held hotspot address stores the same index every iteration;
+            // core 0 consumes it and rebuilds.  The read itself is served
+            // normally -- the byte under a hotspot is padding, and the
+            // machine's loader does not look at it.
+            if (v & MHB_LUT16_HOTSPOT) {
+                g_hs_seen = idx;
+            }
+#endif
             // Diagnostics are recorded on every iteration we are driving,
             // NOT only on the not-driving-to-driving edge.
             //
@@ -720,6 +792,49 @@ int main(void) {
     }
 #endif // MHB_DIAG == 1
 
+#if MHB_MULTILOAD
+    // Core 0's real job in a multiload build: consume hotspot sightings and
+    // rebuild the table from the named page.  Core 1 keeps serving the old
+    // page while this runs -- the machine promised 300 ms of silence after
+    // a touch, and detection (5 ms poll) plus rebuild (~65 ms) fits inside
+    // it several times over.
+#define MHB_POLL_MS 5
+#else
+#define MHB_POLL_MS 100
+#endif
+
+#if MHB_MULTILOAD
+    #define MULTILOAD_POLL() do { \
+        uint32_t seen = g_hs_seen; \
+        if (seen != MHB_HS_NONE) { \
+            g_hs_seen = MHB_HS_NONE; \
+            unsigned off = mhb_addr_from_index((uint16_t)seen); \
+            if (off >= MHB_MODULE_BANKSEL_BASE \
+                    && off < MHB_MODULE_HOTSPOT_BASE) { \
+                g_hs_bank = off - MHB_MODULE_BANKSEL_BASE; \
+            } else { \
+                /* The bank latch is PERSISTENT: only a bank touch moves \
+                 * it.  Resetting it here was the two-touch launch bug -- \
+                 * the parked commit address stays on the latches, core 1 \
+                 * keeps reporting it, and a re-consumption 5 ms later \
+                 * must compute the SAME page, exactly as the single-touch \
+                 * design was idempotent by construction.  Every generated \
+                 * stub sends the pair, so a stale bank never leaks into a \
+                 * later switch. */ \
+                unsigned page = g_hs_bank * 32u + (off & 0x1Fu); \
+                if (page < mhb_page_count && page != g_cur_page) { \
+                    g_cur_page = page; \
+                    mhb_build_lut16_module(g_lut16, mhb_pages[page], 0xFF, \
+                                           MHB_MODULE_PARK_LEAD); \
+                    mhb_mark_module_hotspots(g_lut16, MHB_MODULE_PARK_LEAD); \
+                } \
+            } \
+        } \
+    } while (0)
+#else
+    #define MULTILOAD_POLL() do { } while (0)
+#endif
+
     // Core 0 turns the served-cycle count into something visible.  Installed
     // in a machine that will not boot, the useful question is whether the
     // board is being selected at all.
@@ -732,10 +847,11 @@ int main(void) {
     sleep_ms(250);
     uint32_t last_served = 0;
     while (true) {
+        MULTILOAD_POLL();
         uint32_t served = g_served;
         neo_put(served != last_served ? NEO_SERVING : NEO_IDLE);
         last_served = served;
-        sleep_ms(100);
+        sleep_ms(MHB_POLL_MS);
     }
 #else
     //   dark          nothing is selecting us -- no strobes, or no power
@@ -744,11 +860,12 @@ int main(void) {
     //                     read us and gave up somewhere else
     uint32_t last_served = 0;
     while (true) {
+        MULTILOAD_POLL();
         uint32_t served = g_served;
         gpio_put(GPIO_STATUS_LED,
                  served != last_served ? STATUS_LED_ON : STATUS_LED_OFF);
         last_served = served;
-        sleep_ms(100);
+        sleep_ms(MHB_POLL_MS);
     }
 #endif
 }

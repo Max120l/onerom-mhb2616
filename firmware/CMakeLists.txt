@@ -44,13 +44,18 @@ endif()
 #   FULL8K   all four banks -- one flying lead (other pair's /CS to X1)
 #   HOTSPOT  four images of one bank, switched by magic reads -- for
 #            hotspot-aware software only
+#   MODULE   the BASIC ROM module's whole 16 KB window, eight banks, four
+#            flying leads to the module's own 7442 -- a different card
+#            entirely; see docs/ROM-module.md
 set(MHB_BANK_SOURCE "STATIC" CACHE STRING
-    "Bank source: STATIC, PAIR, FULL8K or HOTSPOT")
-set_property(CACHE MHB_BANK_SOURCE PROPERTY STRINGS STATIC PAIR FULL8K HOTSPOT)
-if(NOT MHB_BANK_SOURCE MATCHES "^(STATIC|PAIR|FULL8K|HOTSPOT)$")
-    message(FATAL_ERROR "MHB_BANK_SOURCE must be STATIC, PAIR, FULL8K or HOTSPOT")
+    "Bank source: STATIC, PAIR, FULL8K, HOTSPOT or MODULE")
+set_property(CACHE MHB_BANK_SOURCE PROPERTY STRINGS
+    STATIC PAIR FULL8K HOTSPOT MODULE)
+if(NOT MHB_BANK_SOURCE MATCHES "^(STATIC|PAIR|FULL8K|HOTSPOT|MODULE)$")
+    message(FATAL_ERROR
+        "MHB_BANK_SOURCE must be STATIC, PAIR, FULL8K, HOTSPOT or MODULE")
 endif()
-foreach(src STATIC PAIR FULL8K HOTSPOT)
+foreach(src STATIC PAIR FULL8K HOTSPOT MODULE)
     if(MHB_BANK_SOURCE STREQUAL src)
         target_compile_definitions(mhb2616 PRIVATE MHB_BANK_${src}=1)
     else()
@@ -89,6 +94,29 @@ target_compile_definitions(mhb2616 PRIVATE MHB_SOCKET_BANK=${MHB_SOCKET_BANK})
 # board through a 2716 programmer, which parks pin 18 at one level.  Never in
 # a machine -- the pair-mate chip answers the other PR state, and this would
 # fight it.
+# MODULE: serve a multiload image -- up to 32 pages of 16 KB, page-switched
+# by hotspot reads of the window's top 32 bytes, page 0 a boot menu.  The
+# image comes from tools/make_multiload.py, which also generates the menu.
+option(MHB_MODULE_MULTILOAD "MODULE: multi-page multiload image" OFF)
+target_compile_definitions(mhb2616 PRIVATE
+    MHB_MULTILOAD=$<BOOL:${MHB_MODULE_MULTILOAD}>)
+if(MHB_MODULE_MULTILOAD AND NOT MHB_BANK_SOURCE STREQUAL "MODULE")
+    message(FATAL_ERROR "MHB_MODULE_MULTILOAD requires MHB_BANK_SOURCE=MODULE")
+endif()
+
+# MODULE: has socket pin 18 been rewired from its /CSn to the 8255's PC7?
+# Off by default, because the three address leads work without any board or
+# socket modification and the monitor's park raises the read strobe at the
+# same time as PC7 -- so the strobe gate already covers it.  Turn it on when
+# the socket has been rewired, and turn it on especially for a full 16 KB
+# image, where bank 7 is no longer the safe place a detached harness lands.
+option(MHB_MODULE_PARK_LEAD "MODULE: socket pin 18 rewired to PC7" OFF)
+target_compile_definitions(mhb2616 PRIVATE
+    MHB_MODULE_PARK_LEAD=$<BOOL:${MHB_MODULE_PARK_LEAD}>)
+if(MHB_MODULE_PARK_LEAD AND NOT MHB_BANK_SOURCE STREQUAL "MODULE")
+    message(WARNING "MHB_MODULE_PARK_LEAD only applies to MODULE; ignored")
+endif()
+
 option(MHB_STATIC_IGNORE_PR "Serve on /CS alone (programmer reads only)" OFF)
 target_compile_definitions(mhb2616 PRIVATE
     MHB_STATIC_IGNORE_PR=$<BOOL:${MHB_STATIC_IGNORE_PR}>)

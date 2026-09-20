@@ -87,6 +87,44 @@ void mhb_build_lut16(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
     }
 }
 
+void mhb_build_lut16_module(uint16_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
+                            uint8_t present, bool use_park) {
+    for (uint32_t idx = 0; idx < MHB_LUT_SIZE; idx++) {
+        unsigned addr = mhb_addr_from_index((uint16_t)idx);
+        unsigned bank = ((idx & MHB_IDX_MOD_A11) ? 1u : 0u)
+                      | ((idx & MHB_IDX_MOD_A12) ? 2u : 0u)
+                      | ((idx & MHB_IDX_MOD_A13) ? 4u : 0u);
+
+        // Gate as the chip being replaced: outputs on while the read strobe
+        // is low.  The monitor parks the card by writing FFh to port C after
+        // every block read (monit3B, EC2D) -- one store that raises PC7 and
+        // PC6 together, so the strobe alone already answers for the park.
+        // The park bit is only consulted when a lead actually carries it;
+        // otherwise pin 18 is a /CSn this mode has no use for.
+        bool here = ((present >> bank) & 1) != 0;
+        unsigned drive = !(idx & MHB_IDX_MOD_nOE) && here
+                      && !(use_park && (idx & MHB_IDX_MOD_PARK));
+
+        uint8_t byte = here ? banks[bank][addr] : 0xFF;
+        lut[idx] = mhb_scramble_data(byte) | (drive ? MHB_LUT16_DRIVE : 0)
+                 | ((bank & 7u) << MHB_LUT16_MOD_BANK_SHIFT);
+    }
+}
+
+void mhb_mark_module_hotspots(uint16_t *lut, bool use_park) {
+    // Bank 7, /OE low (nOE bit clear), the 40 control addresses: 8 bank
+    // latches at 0x7D8+ and 32 commits at 0x7E0+.  A fixed list of writes
+    // rather than a 64 K scan, because this re-runs after every rebuild.
+    for (unsigned n = 0; n < 40; n++) {
+        uint16_t idx = mhb_index_of(MHB_MODULE_BANKSEL_BASE + n)
+                     | MHB_IDX_MOD_A11 | MHB_IDX_MOD_A12 | MHB_IDX_MOD_A13;
+        lut[idx] |= MHB_LUT16_HOTSPOT;
+        if (!use_park) {
+            lut[idx | MHB_IDX_MOD_PARK] |= MHB_LUT16_HOTSPOT;
+        }
+    }
+}
+
 void mhb_build_lut8(uint8_t *lut, const uint8_t banks[][MHB_BANK_SIZE],
                     uint8_t present, unsigned bank) {
     bank &= 3;
