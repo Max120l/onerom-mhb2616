@@ -1,0 +1,157 @@
+{
+ "_comment": "The games image: every pick is an audition name from audition/report.md, an optional display name, and an optional override merged into the audition entry (null deletes a key).  The -1 monitor-cargo games get monit1 at 8000h, which also makes stage-2 drop to AllRAM.",
+ "games": [
+  {
+   "audition": "WILLY2",
+   "name": "JET SET WILLY CS"
+  },
+  {
+   "audition": "JSWILLY",
+   "name": "JET SET WILLY"
+  },
+  {
+   "audition": "M-TRON 1"
+  },
+  {
+   "audition": "M-TRON 2"
+  },
+  {
+   "audition": "PEXESO"
+  },
+  {
+   "audition": "HLIPA"
+  },
+  {
+   "audition": "ARKANOID"
+  },
+  {
+   "audition": "TRAILBLA",
+   "name": "TRAILBLAZER"
+  },
+  {
+   "audition": "FFRUITS",
+   "name": "FLYING FRUITS"
+  },
+  {
+   "audition": "MAGICIAN"
+  },
+  {
+   "audition": "FLAPPY2K",
+   "name": "FLAPPY"
+  },
+  {
+   "audition": "INVADERS"
+  },
+  {
+   "audition": "MUR"
+  },
+  {
+   "audition": "PUZZLE"
+  },
+  {
+   "audition": "ZED"
+  },
+  {
+   "audition": "CROSFIRE",
+   "name": "CROSSFIRE",
+   "override": {
+    "mode": null,
+    "overlay": {
+     "file": "monit1.rom",
+     "at": "0x8000"
+    }
+   }
+  },
+  {
+   "audition": "REVERZ",
+   "name": "REVERSI"
+  },
+  {
+   "audition": "GALAXIA"
+  },
+  {
+   "audition": "KANKAN"
+  },
+  {
+   "audition": "MESTO"
+  },
+  {
+   "audition": "MANIC+",
+   "name": "MANIC MINER"
+  },
+  {
+   "audition": "ON&DUCH4",
+   "name": "ONA A DUCH"
+  },
+  {
+   "audition": "SPACE-RA",
+   "name": "SPACE RAID"
+  },
+  {
+   "audition": "COBRA",
+   "override": {
+    "mode": null,
+    "overlay": {
+     "file": "monit1.rom",
+     "at": "0x8000"
+    }
+   }
+  },
+  {
+   "audition": "KVADRO"
+  },
+  {
+   "audition": "PLOTTING"
+  },
+  {
+   "audition": "GAME2048",
+   "name": "2048"
+  },
+  {
+   "audition": "SOLITER",
+   "name": "SOLITAIRE"
+  },
+  {
+   "audition": "ATOMIX"
+  },
+  {
+   "audition": "JERRY"
+  },
+  {
+   "audition": "KUBANOID"
+  },
+  {
+   "audition": "BOULDER",
+   "name": "BOULDER DASH",
+   "override": {
+    "mode": null,
+    "overlay": {
+     "file": "monit1.rom",
+     "at": "0x8000"
+    }
+   }
+  },
+  {
+   "audition": "SABO  +4",
+   "name": "SABOTER"
+  },
+  {
+   "audition": "SASKO"
+  },
+  {
+   "audition": "POSTARIK",
+   "name": "POSTMAN"
+  },
+  {
+   "audition": "ZMRZLINY",
+   "name": "ICE CREAM"
+  },
+  {
+   "audition": "DOMCEKY",
+   "name": "HOUSES"
+  },
+  {
+   "audition": "ROBOTIK"
+  }
+ ]
+}

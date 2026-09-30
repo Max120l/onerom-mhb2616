@@ -1,0 +1,110 @@
+{
+ "_comment": "The apps image: explicit directories, each a list of picks in the same form as games.json.  MRS2 (a native rmm2 module, not a tape rip) is appended to DEVELOP by build_images.py.",
+ "dirs": [
+  {
+   "name": "MORE GAMES",
+   "picks": [
+    {
+     "audition": "JETPAC"
+    },
+    {
+     "audition": "PSSST"
+    },
+    {
+     "audition": "VLAK"
+    },
+    {
+     "audition": "TETRIS+4",
+     "name": "TETRIS"
+    },
+    {
+     "audition": "LEMMINGS"
+    },
+    {
+     "audition": "MINY"
+    },
+    {
+     "audition": "SEKTOR06",
+     "name": "SEKTOR 06"
+    }
+   ]
+  },
+  {
+   "name": "EDITORS",
+   "picks": [
+    {
+     "audition": "KASWORD3"
+    },
+    {
+     "audition": "KASWRD+2",
+     "name": "KASWORD 2"
+    },
+    {
+     "audition": "KASW-CON"
+    },
+    {
+     "audition": "TEXED"
+    },
+    {
+     "audition": "EVIDENCE"
+    },
+    {
+     "audition": "EVIDEDIT"
+    }
+   ]
+  },
+  {
+   "name": "GRAPHICS",
+   "picks": [
+    {
+     "audition": "GRED 2.1"
+    },
+    {
+     "audition": "GRED 3.2"
+    },
+    {
+     "audition": "GREDIT16"
+    },
+    {
+     "audition": "GREP2"
+    },
+    {
+     "audition": "VEGRAP3X"
+    },
+    {
+     "audition": "VEGRAP;Q",
+     "name": "VEGRAP Q"
+    }
+   ]
+  },
+  {
+   "name": "DEVELOP",
+   "picks": [
+    {
+     "audition": "DDT 6000"
+    },
+    {
+     "audition": "DAT PMD"
+    },
+    {
+     "audition": "PL/1"
+    },
+    {
+     "audition": "VMON9000"
+    }
+   ]
+  },
+  {
+   "name": "MUSIC",
+   "picks": [
+    {
+     "audition": "SKLADATE",
+     "name": "SKLADATEL"
+    },
+    {
+     "audition": "TELEMANN"
+    }
+   ]
+  }
+ ]
+}
