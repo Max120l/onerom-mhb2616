@@ -584,6 +584,17 @@ bench taught them:
   monitor before the tape loader, a margin byte the loader wrote keeps
   the loader's value; only the bytes the rip saw as unwritten take the
   monitor's.  `"boot": false` on an overlay ships the code alone.
+- **A stalled loader is usually waiting for one key, and it is usually
+  H.**  Thirty turbo loaders read their whole tape and then sat still.
+  The suspicion was a missing trailing byte; feeding them padding showed
+  they wanted none of it.  Under monit1 they were parked in its keyboard
+  scan — a -1 loader's own prompt, "HRA - H" — and the factory's nudge
+  (SPACE and EOL pressed together) never registered, because monit1's
+  reader translates one key per scan and two down at once match nothing.
+  The nudge now taps single keys in turn, H first: BOULD +4, FLAPPY+4,
+  FRED +4, MANIC2+3, MANIC23c, PENETR.3 and both PAMPUCHs hand off on H,
+  MICRHYTM and PANGO on S.  The gauntlet presses H and S too, so those
+  games' start paths sit under the HLT check like everyone else's.
 
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire

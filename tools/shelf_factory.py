@@ -33,7 +33,10 @@ import ptp_lib
 from i8080emu import Bus, CPU
 
 STEPS_SETTLE = 2_500_000
-NUDGES = [("SPACE", 0, 16), ("EOL", 14, 16), ("1", 0, 2)]
+# H and S are the -1 loaders' start keys (see NUDGE_KEYS); pressing them
+# in the gauntlet puts those games' start paths under the HLT check too.
+NUDGES = [("SPACE", 0, 16), ("EOL", 14, 16), ("1", 0, 2),
+          ("H", 5, 8), ("S", 1, 8)]
 LIT_PASS = 300                  # drawn bytes that count as "it runs"
 SENTINEL = 0xAA
 
@@ -71,6 +74,19 @@ class TapeBus(Bus):
             self.clock += 1
             return 0x05 | (0x02 if self.tape else 0)
         return super().inp(port)
+
+
+# The keys a stalled loader is offered, one at a time, in this order.  A
+# loader that finishes its tape and then waits is usually a -1 game at
+# its own prompt -- "HRA - H" -- and monit1's reader translates one key
+# per scan: two keys down at once match nothing in its table and come
+# back as nothing.  The first nudge (SPACE and EOL together, every 1.5M
+# steps) never got through; BOULD +4, FLAPPY+4, FRED +4, both MANICs,
+# PENETR.3 and both PAMPUCHs want H, MICRHYTM and PANGO want S.
+NUDGE_KEYS = [('H', 5, 8), ('S', 1, 8), ('SPACE', 0, 16), ('EOL', 14, 16),
+              ('1', 0, 2), ('Y', 1, 16), ('A', 0, 8), ('N', 6, 16)]
+NUDGE_PERIOD = 1_500_000
+NUDGE_HOLD = 300_000
 
 
 def rip_turbo(prog: dict, monitors: list):
@@ -167,10 +183,11 @@ def rip_turbo(prog: dict, monitors: list):
                     if cpu.halted:
                         last = f'{mon_name}: HALT at {pc:04X}'
                         break
-                    if nudge and step % 1_500_000 == 0 and step:
-                        bus.press(0, 16)       # SPACE
-                        bus.press(14, 16)      # EOL
-                    elif nudge and step % 1_500_000 == 750_000:
+                    if nudge and step % NUDGE_PERIOD == 0 and step:
+                        _, col, mask = NUDGE_KEYS[
+                            (step // NUDGE_PERIOD - 1) % len(NUDGE_KEYS)]
+                        bus.press(col, mask)
+                    elif nudge and step % NUDGE_PERIOD == NUDGE_HOLD:
                         bus.release_all()
                     cpu.step()
                 else:

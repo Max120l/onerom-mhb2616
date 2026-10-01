@@ -3,6 +3,7 @@
 
     build_images.py games --work WORK     # shelf/games.json
     build_images.py apps  --work WORK     # shelf/apps.json
+    build_images.py games --work WORK --curation picks.json --name preview
 
 WORK is the directory fetch_corpus.sh and audition.sh fill:
 
@@ -36,16 +37,24 @@ from shelf_factory import screenshot, lit_bytes  # noqa: E402
 
 ap = argparse.ArgumentParser(description=__doc__,
                              formatter_class=argparse.RawDescriptionHelpFormatter)
-ap.add_argument('image', choices=('games', 'apps'))
+ap.add_argument('image', choices=('games', 'apps'),
+                help="which layout: alphabetical game dirs, or app dirs")
 ap.add_argument('--work', type=Path, required=True)
+ap.add_argument('--curation', type=Path,
+                help="curation file (default shelf/<image>.json); a games "
+                     "layout from any file makes a preview image")
+ap.add_argument('--name', help="output name (default <image>): "
+                               "mhb2616-24F-MULTILOAD-<name>.uf2")
 args = ap.parse_args()
 
 WORK = args.work.resolve()
 IMAGE = args.image
+CURATION = args.curation or (HERE / f'{NAME}.json')
+NAME = args.name or IMAGE
 ROMS = WORK / 'roms'
 CORPUS = WORK / 'corpus'
 AUDITION = WORK / 'audition'
-STAGE = WORK / f'stage-{IMAGE}'
+STAGE = WORK / f'stage-{NAME}'
 OUT = WORK / 'out'
 SHOTS = OUT / 'shots'
 MONIT3B = ROMS / 'monit3B.rom'
@@ -92,7 +101,7 @@ def stage_entry(pick):
 
 
 if IMAGE == 'games':
-    cur = json.loads((HERE / 'games.json').read_text())
+    cur = json.loads(CURATION.read_text())
     games = sorted((stage_entry(p) for p in cur['games']),
                    key=lambda e: e['name'])
     CHUNK = 11
@@ -103,7 +112,7 @@ if IMAGE == 'games':
                      "name": f"{part[0]['name'][0]} - {part[-1]['name'][0]}",
                      "entries": part})
 else:
-    cur = json.loads((HERE / 'apps.json').read_text())
+    cur = json.loads(CURATION.read_text())
     shutil.copy(next(CORPUS.rglob('mrs2.rmm')), STAGE / 'mrs2.rmm')
     dirs = []
     for d in cur['dirs']:
@@ -112,7 +121,7 @@ else:
             ents.append({"type": "rmm2", "name": "MRS2", "file": "mrs2.rmm"})
         dirs.append({"type": "dir", "name": d['name'], "entries": ents})
 
-manifest = {"name": IMAGE, "entries": [
+manifest = {"name": NAME, "entries": [
     {"type": "dir", "name": "SYSTEM", "entries": [
         {"type": "rmm",  "name": "BASIC-G 3.0", "file": "basic3.rmm"},
         {"type": "rmm2", "name": "BASIC 2A",    "file": "basic2A.rmm"},
@@ -140,7 +149,7 @@ assert len(changed) == 1, f"two-pass drift: {changed}"
 own = changed[0]
 (STAGE / 'flashcheck.bin').write_bytes(fc.build_shelf(0x4000, sums, own))
 pages, menu = ml.build_pages(manifest['entries'], STAGE)
-print(f"{IMAGE}: {len(pages)} pages = {len(pages) * 16} KB, "
+print(f"{NAME}: {len(pages)} pages = {len(pages) * 16} KB, "
       f"flash check on page {own}")
 if len(pages) > 128:
     raise SystemExit(f"error: {len(pages)} pages; FLASH CHECK's grid "
@@ -173,7 +182,7 @@ def key(bus, cpu, idx, steps):
 
 
 bus, cpu = boot()
-screenshot(bus, SHOTS / f'{IMAGE}-main.png')
+screenshot(bus, SHOTS / f'{NAME}-main.png')
 
 for di in range(1, len(menu)):
     bus, cpu = boot()
@@ -197,7 +206,7 @@ key(bus, cpu, 0, 2_000_000)
 key(bus, cpu, 6, 170_000_000)
 done, bad = bus.ram[0x3E00], bus.ram[0x3E01]
 print(f"FLASH CHECK: swept {done} pages, bad={bad}")
-screenshot(bus, SHOTS / f'{IMAGE}-flashcheck.png')
+screenshot(bus, SHOTS / f'{NAME}-flashcheck.png')
 assert done == len(pages) and bad == 0 and bus.mod_page == 0
 print("emulator verification PASSED")
 
@@ -216,11 +225,11 @@ subprocess.run(['cmake', '-S', str(REPO / 'firmware'), '-B', str(BUILD),
                 '-DMHB_BANK_SOURCE=MODULE', '-DMHB_MODULE_MULTILOAD=ON'],
                check=True, env=env, capture_output=True)
 subprocess.run(['ninja'], cwd=BUILD, check=True, env=env)
-uf2 = OUT / f'mhb2616-24F-MULTILOAD-{IMAGE}.uf2'
-binf = OUT / f'mhb2616-24F-MULTILOAD-{IMAGE}.bin'
+uf2 = OUT / f'mhb2616-24F-MULTILOAD-{NAME}.uf2'
+binf = OUT / f'mhb2616-24F-MULTILOAD-{NAME}.bin'
 shutil.copy(BUILD / 'mhb2616.uf2', uf2)
 subprocess.run(['arm-none-eabi-objcopy', '-O', 'binary',
                 str(BUILD / 'mhb2616.elf'), str(binf)], check=True)
 size = binf.stat().st_size
 assert size <= 2 * 1024 * 1024, "over the RP2354A's 2 MB"
-print(f"{IMAGE} built: {size // 1024} KB of 2048 KB -> {uf2}")
+print(f"{NAME} built: {size // 1024} KB of 2048 KB -> {uf2}")
