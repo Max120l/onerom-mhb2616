@@ -239,8 +239,9 @@ active low and both required, which is 2732 read behaviour unchanged.
 
 ## Serving the whole module from one board
 
-`MHB_BANK_SOURCE=MODULE`. **Built and host-tested; not yet run on
-hardware.** A board in any one socket already sees A0–A10, `/OE` on pin 20
+`MHB_BANK_SOURCE=MODULE`. **Proven on hardware** -- every multiload image
+since the first games volume has run this way, FLASH CHECK confirming
+each flash on the bench. A board in any one socket already sees A0–A10, `/OE` on pin 20
 and the data bus. What it cannot see is which *other* socket an access is
 for — and the cheap way to learn that is to read the 7442's three address
 inputs rather than its five outputs.
