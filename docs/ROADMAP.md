@@ -251,7 +251,7 @@ the gauntlet woke TREASURE ISLAND and BOMBARDER (and PAVUCI, which
 turned out to be a first stage waiting for tape -- a new verdict
 catches that class now).  With the
 corpus grown to every Infoserver package, the census stands at **386
-programs auditioned, 104 through the gauntlet**.  The curation and
+programs auditioned, 100 through the gauntlet**.  The curation and
 the build pipeline live in `shelf/` now, after a container recycle
 took the first copy.
 
