@@ -89,6 +89,8 @@ def stage_entry(pick):
             e.pop(k, None)
         else:
             e[k] = v
+    if 'patch' in pick:
+        e['patch'] = pick['patch']
     if e['type'] == 'tape':
         src = next(c for c in CORPUS.rglob(e['file']) if c.is_file())
         shutil.copy(src, STAGE / e['file'])
