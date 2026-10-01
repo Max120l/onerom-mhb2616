@@ -334,7 +334,8 @@ def test_overlay_game_drops_to_allram(tmp_path):
     pages, _ = ml.build_pages(
         [{"type": "binary", "name": "OVG", "file": "game.bin",
           "load": "0x1000", "exec": "0x1000",
-          "overlay": {"file": "cargo.bin", "at": "0x8000"}}], tmp_path)
+          "overlay": {"file": "cargo.bin", "at": "0x8000",
+                      "boot": False}}], tmp_path)
     bus = Bus(fake_monitor(), pages=pages)
     cpu = boot(bus)
     run_steps(cpu, 400_000)
@@ -357,6 +358,46 @@ def test_overlay_game_drops_to_allram(tmp_path):
     bus.press(0, 2)
     assert run_until_pc(cpu, 0x1000, 20_000_000), "plain binary never entered"
     assert bus.rom_visible, "a native game without cargo lost its monitor"
+
+
+def test_cargo_monitor_startup_state_ships(tmp_path):
+    # A cargo monitor's variables live in the VRAM margins and are set by
+    # its own startup, which a shelf boot never runs: BOULDER DASH read
+    # monit1's font address at C03Ch as 0000h and drew garbage.  The
+    # builder runs the startup and ships what it leaves.  This fake
+    # monitor sets C03Ch=8500h and C07Fh=5Ah, then polls the keyboard.
+    monitor = bytes([0x3E, 0x00, 0x32, 0x3C, 0xC0,     # C03C <- 00
+                     0x3E, 0x85, 0x32, 0x3D, 0xC0,     # C03D <- 85
+                     0x3E, 0x5A, 0x32, 0x7F, 0xC0,     # C07F <- 5A
+                     0xDB, 0xF5, 0xC3, 0x0F, 0x80])    # IN F5 / JMP 800F
+    (tmp_path / "game.bin").write_bytes(bytes(0x100))
+    (tmp_path / "mon.rom").write_bytes(monitor)
+    # The loader painted C000h and wrote C07Fh=11h itself; it left C03Ch/D
+    # unwritten (0).  On the machine the monitor starts first, so the
+    # loader's 11h must survive and the zeros take the monitor's values.
+    screen = bytearray(0x100)
+    screen[0x00] = 0x2A
+    screen[0x7F] = 0x11
+    (tmp_path / "scr.bin").write_bytes(bytes(screen))
+    for with_screen in (True, False):
+        ent = {"type": "binary", "name": "MG", "file": "game.bin",
+               "load": "0x1000", "exec": "0x1000",
+               "overlay": {"file": "mon.rom", "at": "0x8000"}}
+        if with_screen:
+            ent["screen"] = {"file": "scr.bin", "load": "0xC000"}
+        pages, _ = ml.build_pages([ent], tmp_path)
+        bus = Bus(fake_monitor(), pages=pages)
+        cpu = boot(bus)
+        run_steps(cpu, 400_000)
+        bus.press(0, 2)                               # key "1"
+        assert run_until_pc(cpu, 0x1000, 20_000_000), "game never entered"
+        assert (bus.ram[0xC03D], bus.ram[0xC03C]) == (0x85, 0x00), \
+            "the monitor's font address did not ship"
+        if with_screen:
+            assert bus.ram[0xC07F] == 0x11, "the loader's margin byte lost"
+            assert bus.ram[0xC000] == 0x2A, "the painted screen lost"
+        else:
+            assert bus.ram[0xC07F] == 0x5A
 
 
 def test_willy2_boots_through_the_compat_monitor():

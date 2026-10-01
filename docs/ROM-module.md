@@ -570,6 +570,20 @@ bench taught them:
   mapped too and still passed — these games only read through `E000h`
   once they draw menus or move, one more class that only ever showed
   on the bench.
+- **A cargo monitor needs its startup, not just its code.**  monit1
+  keeps its working variables in the invisible VRAM margins — font
+  address at `C03Ch` (8500h), print mask and cursor beside it, a
+  keyboard table further down: 166 bytes, written by its own cold start.
+  Shipping the monitor as code alone left them blank, so every
+  character a -1 game printed through the monitor came from font
+  address 0000h: BOULDER DASH's status bar was garbage on the bench,
+  and its title prompt ("HRA - H , NAHRAVANI - N") drew as a solid
+  inverse bar.  The builder now runs the cargo monitor's cold start in
+  the emulator until it polls the keyboard, and ships the margin bytes
+  it leaves inside the screen segment.  Since a real -1 starts its
+  monitor before the tape loader, a margin byte the loader wrote keeps
+  the loader's value; only the bytes the rip saw as unwritten take the
+  monitor's.  `"boot": false` on an overlay ships the code alone.
 
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire

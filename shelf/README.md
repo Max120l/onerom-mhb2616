@@ -40,8 +40,10 @@ Each pick names a program by its audition name (the name in
 optional `override` merged into the audition entry (`null` deletes a
 key). The monitor-cargo games (BOULDER DASH, CROSSFIRE, COBRA) carry
 `{"mode": null, "overlay": {"file": "monit1.rom", "at": "0x8000"}}`:
-a native boot with the PMD 85-1 monitor at 8000h, which also makes the
-loader switch to AllRAM before the jump (see docs/ROM-module.md).
+a native boot with the PMD 85-1 monitor at 8000h. The build also runs
+that monitor's startup to ship the variables it keeps in the video
+margins (font address, cursor, key table), and the loader switches to
+AllRAM before the jump (see docs/ROM-module.md).
 
 The games image is sorted by display name and split into directories of
 11; the directory labels follow from the names. `build_images.py` stops

@@ -653,6 +653,72 @@ def page_from_binary(payload: bytes, load: int, exec_: int, name: str,
     return pad_page(bytes(stub) + bytes(PAYLOAD_BASE - len(stub)) + payload)
 
 
+def monitor_startup_margins(monitor: bytes, at: int) -> dict:
+    """Run a cargo monitor's own cold start and return the VRAM-margin
+    bytes it leaves behind, {address: value}.
+
+    A PMD 85 monitor keeps its working variables in the invisible 16
+    bytes of each 64-byte video line: monit1 stores its font address at
+    C03Ch, its print mask and cursor beside it, a keyboard table further
+    down.  A game shipped with the monitor as cargo calls the monitor's
+    print and key routines, which read those variables -- but the cargo
+    arrives as code only, its startup never run.  BOULDER DASH's status
+    bar and title prompt drew from font address 0000h: garbage.
+
+    The startup is run here, at build time, until it has polled the
+    keyboard a few dozen times (it is sitting at its prompt by then)."""
+    from i8080emu import Bus, CPU
+    bus = Bus(bytes(0x2000))
+    bus.startup_map = False
+    bus.rom_visible = False
+    bus.ram[at:at + len(monitor)] = monitor
+    margins, polls = {}, [0]
+    write, inp = bus.write, bus.inp
+
+    def logged_write(a, v):
+        if a >= 0xC000 and (a & 0x3F) >= COLS:
+            margins[a] = v & 0xFF
+        write(a, v)
+
+    def logged_inp(port):
+        if port == 0xF5:
+            polls[0] += 1
+        return inp(port)
+
+    bus.write, bus.inp = logged_write, logged_inp
+    cpu = CPU(bus)
+    cpu.pc, cpu.sp = at, 0x7FFF
+    for _ in range(5_000_000):
+        if polls[0] >= 50 or cpu.halted:
+            break
+        cpu.step()
+    if polls[0] < 50:
+        raise SystemExit(f"error: the cargo monitor at {at:04X}h never "
+                         f"reached its keyboard poll")
+    return margins
+
+
+def with_monitor_margins(screen, margins: dict):
+    """Merge a monitor's startup margins into a cartridge's screen segment
+    (or make one).  On the real machine the monitor starts first and the
+    loader runs after it, so a margin byte the loader wrote wins; the rip
+    records unwritten bytes as 0, so a zero there takes the monitor's
+    value.  Visible columns are the loader's, untouched."""
+    lo, hi = min(margins), max(margins) + 1
+    if screen is not None:
+        lo, hi = min(lo, screen[0]), max(hi, screen[0] + len(screen[1]))
+    buf = bytearray(hi - lo)
+    for a, v in margins.items():
+        buf[a - lo] = v
+    if screen is not None:
+        s0, sdata = screen
+        for i, b in enumerate(sdata):
+            a = s0 + i
+            if (a & 0x3F) < COLS or b:
+                buf[a - lo] = b
+    return lo, bytes(buf)
+
+
 def build_pages(entries: list, root: Path) -> tuple:
     """-> (pages, menu_entries).  Menu slots (page 0 and any "dir" entry's
     submenu page) are reserved first and filled once their entry pages
@@ -712,6 +778,11 @@ def build_pages(entries: list, root: Path) -> tuple:
             if "high" in ent:
                 high = (int(ent["high"]["load"], 0),
                         (root / ent["high"]["file"]).read_bytes())
+            if "overlay" in ent and ent["overlay"].get("boot", True):
+                # The cargo monitor's variables, as its own startup leaves
+                # them ("boot": false ships the code alone).
+                screen = with_monitor_margins(
+                    screen, monitor_startup_margins(ov, at))
             # Every program entry takes the stage-2 route now -- not only
             # the multi-page and register-restore cases, but the small
             # singles too, because stage-2 is where the clean-room clear
