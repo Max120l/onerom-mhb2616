@@ -595,8 +595,15 @@ bench taught them:
   FRED +4, MANIC2+3, MANIC23c, PENETR.3 and both PAMPUCHs hand off on H,
   MICRHYTM and PANGO on S.  The gauntlet presses H and S too, so those
   games' start paths sit under the HLT check like everyone else's —
-  and the same two keys woke TREASURE ISLAND, BOMBARDER and PAVUCI,
-  which only draw their play screen after a start key.
+  and the same two keys woke TREASURE ISLAND and BOMBARDER, which only
+  draw their play screen after a start key.
+- **Parked in the tape reader is not running.**  PAVUCI passed the
+  gauntlet on a 505-byte title and then sat in the compat monitor's
+  reader at 8C19h, waiting for a header that will never come from a
+  module -- the multi-part class again (CERES-01, TANK, TVARE), minus
+  the static, because the header-hunting reader rejects noise quietly.
+  A program whose run ends inside its monitor's tape reader is now
+  "waits for tape", whatever it drew first.
 - **Judge the screen at its fullest.**  Adding S to the gauntlet's keys
   failed two shipped games: MESTO and ONA A DUCH start a level on S and
   wipe their title, and the "no draw" floor was measured on the final

@@ -49,7 +49,7 @@ args = ap.parse_args()
 
 WORK = args.work.resolve()
 IMAGE = args.image
-CURATION = args.curation or (HERE / f'{NAME}.json')
+CURATION = args.curation or (HERE / f'{IMAGE}.json')
 NAME = args.name or IMAGE
 ROMS = WORK / 'roms'
 CORPUS = WORK / 'corpus'

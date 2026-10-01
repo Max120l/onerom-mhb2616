@@ -235,13 +235,35 @@ monit3B's ROM on ours.  Stage-2 now drops to AllRAM before jumping
 into any overlay entry; the full story is an earned check in
 docs/ROM-module.md.
 
-Remaining, in rising ambition: the last turbo hold-outs (the MANIC
-two-part family caps out with tape still unread; FLAPPY+4 and kin
-stall at 8A3xh with the tape already empty -- a trailing-padding
-variant might free them cheaply; MUSICA and DAM stop at 8BCEh with
-bytes left); composite pages (a BASIC plus the module software it
-loads, e.g. `wurmi`/`kli2`, which have no boot stub of their own);
-more than 16 entries per menu.
+Two more rounds on the bench and in the factory.  The monitor-cargo
+games drew their status bars from font address 0000h -- monit1 keeps
+its variables in the VRAM margins and sets them in a startup the shelf
+never ran -- so the builder now runs the cargo monitor's cold start
+and ships what it leaves (BOULDER DASH's status bar, and its title
+prompt, came right on the board).  Then the "stall at 8A3xh with the
+tape empty" hold-outs turned out to be -1 loaders parked at their own
+"HRA - H" prompt: the factory's nudge pressed two keys at once, which
+monit1's one-key-per-scan reader cannot see.  One key at a time, H
+first, rescued ten of them (FLAPPY, FRED, MANIC MINER 2, PENETRATOR,
+PANGO, PAMPUCH, MICRORHYTHM and the 4004-joystick editions -- that is
+what the "+4" in the tape names means), and pressing the same keys in
+the gauntlet woke TREASURE ISLAND and BOMBARDER (and PAVUCI, which
+turned out to be a first stage waiting for tape -- a new verdict
+catches that class now).  With the
+corpus grown to every Infoserver package, the census stands at **386
+programs auditioned, 104 through the gauntlet**.  The curation and
+the build pipeline live in `shelf/` now, after a container recycle
+took the first copy.
+
+Remaining, in rising ambition: the last turbo hold-outs (MANIC+2 and
+MANIC23c -- one caps with tape unread, the other rips but draws
+nothing; MUSICA and DAM stop at 8BCEh with bytes left; JASON, HIGHENC,
+SPINDZ, PISQORKY, LEMM256K and -WILLY- cap without draining under any
+monitor); composite pages (a BASIC plus the module software it loads,
+e.g. `wurmi`/`kli2`, which have no boot stub of their own); more than
+16 entries per menu; and a 4004 joystick, now that there is a shelf of
+games written for one -- they poll port 4Ch, the GPIO 8255's port A,
+active low.
 
 ## Parked
 

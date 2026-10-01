@@ -244,6 +244,9 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
       shows after inhaling the tape port's noise as its next stage.
     - 'no draw': the lit floor, as ever -- measured at the screen's
       fullest moment across the nudges, since a start key may clear it.
+    - 'waits for tape': the run ends inside the monitor's tape reader --
+      a first stage expecting the next from tape (PAVUCI), the
+      multi-part class without the static.
 
     Tape reads are NOT a verdict: healthy games poll the port and reject
     its noise (KUBANOID, MAGICIAN) exactly as they do on the bench.
@@ -289,12 +292,31 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
             best = max(best, snapshot(), key=lambda s: s[0])
     except NotImplementedError as e:
         return f'emulator: {e}', lit_bytes(bus), bus
+    # A run that ends inside the monitor's tape reader is a first stage
+    # waiting for the next one -- PAVUCI drew a title and then sat in
+    # the byte loop at 8A42h for a header no module will ever send.
+    # Unshippable, whatever it drew.  The reader's polling sites are
+    # read off the monitor image itself (every IN from the USART in its
+    # tape section), natively at E000h or relocated to 8000h.
+    base = 0xE000 if rom_at_e000 else 0x8000
+    if any(s - 0x10 <= cpu.pc < s + 0x20
+           for s in usart_sites(bytes(bus.rom), base)):
+        return 'waits for tape', lit_bytes(bus), bus
     lit, visible = best
     if lit < LIT_PASS:
         return f'no draw ({lit} lit)', lit, bus
     if noisy(visible):
         return 'noise (static-like byte distribution)', lit, bus
     return 'PASS', lit, bus
+
+
+def usart_sites(monitor: bytes, base: int) -> list:
+    """Addresses in the monitor's tape section (its upper half -- the
+    lower half is the command loop and terminal I/O, which poll the
+    same port for other reasons) where it reads the 8251."""
+    return [base + i for i in range(len(monitor) - 1)
+            if i >= 0x800 and monitor[i] == 0xDB
+            and monitor[i + 1] in (0x1C, 0x1D, 0x1E, 0x1F)]
 
 
 def visible_bytes(bus) -> list:
