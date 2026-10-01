@@ -262,8 +262,13 @@ SPINDZ, PISQORKY, LEMM256K and -WILLY- cap without draining under any
 monitor); composite pages (a BASIC plus the module software it loads,
 e.g. `wurmi`/`kli2`, which have no boot stub of their own); more than
 16 entries per menu; and a 4004 joystick, now that there is a shelf of
-games written for one -- they poll port 4Ch, the GPIO 8255's port A,
-active low.
+games written for one.  They poll port 4Ch -- the GPIO 8255's port A
+-- active low, and the mask table in BOULDER DASH 4 (confirmed by
+driving each bit in the emulator and watching the robot) reads: bit 0
+down, bit 1 up, bit 2 right, bit 3 left, bit 4 fire; each bit simply
+injects the key code the game already understands (Y, E, 85h, 83h,
+'0').  An ESP32 running Bluepad32 with five open-drain pins into the
+GPIO connector would do.
 
 ## Parked
 

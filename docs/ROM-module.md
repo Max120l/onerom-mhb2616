@@ -603,7 +603,11 @@ bench taught them:
   module -- the multi-part class again (CERES-01, TANK, TVARE), minus
   the static, because the header-hunting reader rejects noise quietly.
   A program whose run ends inside its monitor's tape reader is now
-  "waits for tape", whatever it drew first.
+  "waits for tape", whatever it drew first.  It also caught SKLADATEL,
+  shipped untested in the apps image: a 487-byte prompt, then the
+  reader forever.  The check is skipped for -1 games, which are
+  cold-verified inside the -2 monitor by design and land in its code
+  wherever their monit1 entry points happen to point.
 - **Judge the screen at its fullest.**  Adding S to the gauntlet's keys
   failed two shipped games: MESTO and ONA A DUCH start a level on S and
   wipe their title, and the "no draw" floor was measured on the final

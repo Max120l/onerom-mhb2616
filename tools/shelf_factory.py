@@ -198,7 +198,7 @@ def rip_turbo(prog: dict, monitors: list):
 
 def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
                 monit3: bytes, screen: tuple | None = None,
-                high: tuple | None = None):
+                high: tuple | None = None, tape_check: bool = True):
     """Boot the extracted image the way the SHELF will: fresh -2
     environment, screen segment applied, stage-2-style register init, cold
     jump.  A PASS here is a game the stage-2 loader can genuinely start."""
@@ -227,10 +227,12 @@ def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
         ok.append((high[0], high[0] + len(high[1])))
     def exec_ok(pc):
         return any(a <= pc < b for a, b in ok)
-    return gauntlet(mk, rom_at_e000=False, exec_ok=exec_ok)
+    return gauntlet(mk, rom_at_e000=False, exec_ok=exec_ok,
+                    tape_check=tape_check)
 
 
-def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
+def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None,
+             tape_check: bool = True):
     """Settle, nudge, then judge -- the full obstacle course a shelf entry
     must survive, with every check named after the game that taught it:
 
@@ -298,9 +300,13 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
     # Unshippable, whatever it drew.  The reader's polling sites are
     # read off the monitor image itself (every IN from the USART in its
     # tape section), natively at E000h or relocated to 8000h.
+    # Only meaningful when the monitor in the machine is the one the
+    # program was written for: a -1 game cold-verified in the -2 monitor
+    # (BOULDER DASH, MANIC MINER 2) calls monit1 entry points and lands
+    # wherever the -2 code happens to be, reader included.
     base = 0xE000 if rom_at_e000 else 0x8000
-    if any(s - 0x10 <= cpu.pc < s + 0x20
-           for s in usart_sites(bytes(bus.rom), base)):
+    if tape_check and any(s - 0x10 <= cpu.pc < s + 0x20
+                          for s in usart_sites(bytes(bus.rom), base)):
         return 'waits for tape', lit_bytes(bus), bus
     lit, visible = best
     if lit < LIT_PASS:
@@ -468,7 +474,8 @@ def _audition_one(job):
             return name, src, f'turbo rip failed: {why}', None
         image, load, exec_, regs, mon_name, screen, high = got
         verdict, lit, bus = verify_cold(image, load, exec_, regs, monit3,
-                                        screen, high)
+                                        screen, high,
+                                        tape_check=(mon_name != 'monit1'))
         if bus is not None:
             screenshot(bus, out / "shots" / f"{tag}.png")
         if verdict != 'PASS' and name.strip() in _POOL['trust']:
