@@ -242,7 +242,8 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
     - 'noise' backstop: static-like byte distribution on a lit screen --
       what a multi-part loader's first stage (CERES-01, TVARE, TANK)
       shows after inhaling the tape port's noise as its next stage.
-    - 'no draw': the lit floor, as ever.
+    - 'no draw': the lit floor, as ever -- measured at the screen's
+      fullest moment across the nudges, since a start key may clear it.
 
     Tape reads are NOT a verdict: healthy games poll the port and reject
     its noise (KUBANOID, MAGICIAN) exactly as they do on the bench.
@@ -266,10 +267,18 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
                 return 'halted'
         return None
 
+    # The screen is judged at its fullest, not its last: a nudge key can
+    # legitimately clear it (MESTO and ONA A DUCH start a level on S and
+    # wipe their title), and "did it draw" is a question about the peak.
+    # HLT and VRAM execution are still caught wherever they happen.
+    def snapshot():
+        return lit_bytes(bus), visible_bytes(bus)
+
     try:
         why = run(STEPS_SETTLE)
         if why:
             return why, lit_bytes(bus), bus
+        best = snapshot()
         for key, col, mask in NUDGES:
             why = run(400_000, (col, mask))
             bus.release_all()
@@ -277,20 +286,24 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None):
             if why:
                 return (why if why == 'executes VRAM'
                         else f'{why} on {key}'), lit_bytes(bus), bus
+            best = max(best, snapshot(), key=lambda s: s[0])
     except NotImplementedError as e:
         return f'emulator: {e}', lit_bytes(bus), bus
-    lit = lit_bytes(bus)
+    lit, visible = best
     if lit < LIT_PASS:
         return f'no draw ({lit} lit)', lit, bus
-    if noisy(bus):
+    if noisy(visible):
         return 'noise (static-like byte distribution)', lit, bus
     return 'PASS', lit, bus
 
 
-def noisy(bus) -> bool:
+def visible_bytes(bus) -> list:
+    return [bus.ram[0xC000 + ln * 64 + c]
+            for ln in range(256) for c in range(48)]
+
+
+def noisy(visible: list) -> bool:
     from collections import Counter
-    visible = [bus.ram[0xC000 + ln * 64 + c]
-               for ln in range(256) for c in range(48)]
     top8 = sum(n for _, n in Counter(visible).most_common(8))
     return top8 < len(visible) // 5
 

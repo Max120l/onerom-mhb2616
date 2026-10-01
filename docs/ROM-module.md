@@ -594,7 +594,14 @@ bench taught them:
   The nudge now taps single keys in turn, H first: BOULD +4, FLAPPY+4,
   FRED +4, MANIC2+3, MANIC23c, PENETR.3 and both PAMPUCHs hand off on H,
   MICRHYTM and PANGO on S.  The gauntlet presses H and S too, so those
-  games' start paths sit under the HLT check like everyone else's.
+  games' start paths sit under the HLT check like everyone else's —
+  and the same two keys woke TREASURE ISLAND, BOMBARDER and PAVUCI,
+  which only draw their play screen after a start key.
+- **Judge the screen at its fullest.**  Adding S to the gauntlet's keys
+  failed two shipped games: MESTO and ONA A DUCH start a level on S and
+  wipe their title, and the "no draw" floor was measured on the final
+  frame.  The verdict now takes the peak over the whole run; HLT and
+  VRAM execution are still caught wherever they happen.
 
 One caution: a multiload set fills every bank of every page, so the
 detached-harness safety of a partial image (bank 7 absent, broken wire
