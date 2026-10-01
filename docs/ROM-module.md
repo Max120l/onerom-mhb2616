@@ -622,6 +622,22 @@ bench taught them:
   too but only act on it in joystick mode).  A `patch` list on an
   entry -- find/replace over the payload with an expected match count
   -- ships a keyboard edition: `IN 4Ch` becomes `MVI A,FFh`.
+- **A handoff that starts saving is the loader, not the game.**  PANGO
+  and MICRORHYTHM showed their title on the bench and answered no key.
+  Their loader's prompt offers "S to save"; the rip's nudge pressed it,
+  and the first instruction outside the loader body was a trampoline
+  in the VRAM margin (C0F0h) into monit1's tape-save routine, which
+  the rip took for the game's entry.  The emulator's instant USART let
+  the save finish and fall back to the prompt, so the extraction
+  verified; the bench's tape interface waited in the save forever.  A
+  handoff candidate is now watched for 200,000 steps and rejected if
+  it sends four or more bytes on the tape port (TREASURE ISLAND's init
+  sends one), the nudge order puts the play keys G and P before S, and
+  the real entries came out at 0000h and 0500h.
+- **Streamed levels cannot ship.**  LEMMINGS passed on its menu and
+  asked for the tape at START: the game streams sixty level "sectors"
+  from tape as you play (SEKTOR01-60 on the same tape are level data,
+  not programs), so a module copy ends at the first level's load.
 - **Judge the screen at its fullest.**  Adding S to the gauntlet's keys
   failed two shipped games: MESTO and ONA A DUCH start a level on S and
   wipe their title, and the "no draw" floor was measured on the final

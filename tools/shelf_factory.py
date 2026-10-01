@@ -84,10 +84,14 @@ class TapeBus(Bus):
 # back as nothing.  The first nudge (SPACE and EOL together, every 1.5M
 # steps) never got through; BOULD +4, FLAPPY+4, FRED +4, both MANICs,
 # PENETR.3 and both PAMPUCHs want H, MICRHYTM and PANGO want S.
-NUDGE_KEYS = [('H', 5, 8), ('S', 1, 8), ('SPACE', 0, 16), ('EOL', 14, 16),
-              ('1', 0, 2), ('Y', 1, 16), ('A', 0, 8), ('N', 6, 16)]
-NUDGE_PERIOD = 1_500_000
+NUDGE_KEYS = [('H', 5, 8), ('G', 4, 8), ('P', 9, 4), ('S', 1, 8),
+              ('SPACE', 0, 16), ('EOL', 14, 16), ('1', 0, 2), ('Y', 1, 16),
+              ('A', 0, 8), ('N', 6, 16)]
+NUDGE_PERIOD = 1_000_000
 NUDGE_HOLD = 300_000
+HANDOFF_GUARD = 200_000         # steps a handoff is watched on the tape port
+HANDOFF_TX_MAX = 4              # data bytes sent there that mean "saving"
+                                # (TREASURE ISLAND's init sends one)
 
 
 def rip_turbo(prog: dict, monitors: list):
@@ -144,43 +148,44 @@ def rip_turbo(prog: dict, monitors: list):
                 bend = min(start + len(body), 0x8000)
                 bus.wrote[start:bend] = b'\x01' * (bend - start)
                 lo, hi = start, start + len(body)
+                # A handoff candidate is the first instruction executed
+                # outside the loader body and the monitor once the tape
+                # is drained.  It is only accepted if the next while is
+                # quiet on the tape port: PANGO's and MICRORHYTHM's
+                # loaders offer "S to save" at their prompt, the nudge
+                # pressed it, and the first thing outside the body was a
+                # trampoline into monit1's save routine -- which the
+                # emulator's instant USART let fall back to the prompt,
+                # and the bench's real tape interface waited in forever.
+                tx = [0]
+                out = bus.out
+
+                def guarded_out(port, v):
+                    if (port & 0xFD) == 0x1C:
+                        tx[0] += 1
+                    out(port, v)
+                bus.out = guarded_out
+                armed = True
+                pending = None          # (capture, deadline) under guard
                 for step in range(12_000_000):
                     pc = cpu.pc
-                    if not bus.tape and not (lo <= pc < hi) \
+                    if pending is not None:
+                        if tx[0] >= HANDOFF_TX_MAX:
+                            # the loader is saving: not a handoff.  Let it
+                            # finish and re-arm once it is back home.
+                            pending, armed = None, False
+                        elif step >= pending[1] or cpu.halted:
+                            # (a HLT right after handoff is the program's
+                            # problem, for the cold verify to judge; the
+                            # capture was taken at the handoff instant)
+                            return pending[0], None
+                    elif armed and not bus.tape and not (lo <= pc < hi) \
                             and not (0x8000 <= pc < 0x9000):
-                        snap = bytes(bus.ram[:0x8000])
-                        marks = [i for i, w in enumerate(bus.wrote[:0x8000])
-                                 if w]
-                        a0, b0 = marks[0], marks[-1] + 1
-                        img = bytes(snap[i] if bus.wrote[i] else 0
-                                    for i in range(a0, b0))
-                        regs = {k: cpu.r[k] for k in 'ABCDEHL'}
-                        regs['SP'] = cpu.sp
-                        # the loading screen, if the loader painted one:
-                        # some games keep it as their title backdrop, some
-                        # put their only instructions on it
-                        vm = [i for i in range(0xC000, 0x10000)
-                              if bus.wrote[i]]
-                        screen = None
-                        if vm:
-                            s0, s1 = vm[0], vm[-1] + 1
-                            screen = (s0, bytes(
-                                bus.ram[i] if bus.wrote[i] else 0
-                                for i in range(s0, s1)))
-                        # ...and anything stored above the monitor: BOULDER
-                        # DASH keeps a 24-byte table at BFD8h that its menu
-                        # renderer walks -- shipped as its own segment,
-                        # because the image extent stops at 8000h
-                        hm = [i for i in range(0x9000, 0xC000)
-                              if bus.wrote[i]]
-                        high = None
-                        if hm:
-                            h0, h1 = hm[0], hm[-1] + 1
-                            high = (h0, bytes(
-                                bus.ram[i] if bus.wrote[i] else 0
-                                for i in range(h0, h1)))
-                        return (img, a0, pc, regs, mon_name, screen,
-                                high), None
+                        tx[0] = 0
+                        pending = (_capture(bus, cpu, mon_name),
+                                   step + HANDOFF_GUARD)
+                    elif not armed and lo <= pc < hi:
+                        armed = True
                     if cpu.halted:
                         last = f'{mon_name}: HALT at {pc:04X}'
                         break
@@ -195,6 +200,35 @@ def rip_turbo(prog: dict, monitors: list):
                     last = (f'{mon_name}: cap at {cpu.pc:04X}, '
                             f'{len(bus.tape)} tape bytes left')
     return None, last
+
+
+def _capture(bus, cpu, mon_name):
+    """The extraction at this instant: image, entry, registers, and the
+    loader's writes above the program as segments."""
+    snap = bytes(bus.ram[:0x8000])
+    marks = [i for i, w in enumerate(bus.wrote[:0x8000]) if w]
+    a0, b0 = marks[0], marks[-1] + 1
+    img = bytes(snap[i] if bus.wrote[i] else 0 for i in range(a0, b0))
+    regs = {k: cpu.r[k] for k in 'ABCDEHL'}
+    regs['SP'] = cpu.sp
+    # the loading screen, if the loader painted one: some games keep it
+    # as their title backdrop, some put their only instructions on it
+    vm = [i for i in range(0xC000, 0x10000) if bus.wrote[i]]
+    screen = None
+    if vm:
+        s0, s1 = vm[0], vm[-1] + 1
+        screen = (s0, bytes(bus.ram[i] if bus.wrote[i] else 0
+                            for i in range(s0, s1)))
+    # ...and anything stored above the monitor: BOULDER DASH keeps a
+    # 24-byte table at BFD8h that its menu renderer walks -- shipped as
+    # its own segment, because the image extent stops at 8000h
+    hm = [i for i in range(0x9000, 0xC000) if bus.wrote[i]]
+    high = None
+    if hm:
+        h0, h1 = hm[0], hm[-1] + 1
+        high = (h0, bytes(bus.ram[i] if bus.wrote[i] else 0
+                          for i in range(h0, h1)))
+    return (img, a0, cpu.pc, regs, mon_name, screen, high)
 
 
 def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
