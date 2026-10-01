@@ -400,6 +400,32 @@ def test_cargo_monitor_startup_state_ships(tmp_path):
             assert bus.ram[0xC07F] == 0x5A
 
 
+def test_patch_edits_the_shipped_program(tmp_path):
+    # A find/replace over the payload with an expected match count: the
+    # keyboard-only edition of a 4004-club game turns its joystick poll
+    # (IN 4Ch) into MVI A,FFh -- same length, port reads "nothing pressed".
+    prog = bytes([0xDB, 0x4C, 0x00, 0x00, 0xDB, 0x4C, 0x76])
+    (tmp_path / "j.bin").write_bytes(prog)
+    pages, _ = ml.build_pages(
+        [{"type": "binary", "name": "J", "file": "j.bin",
+          "load": "0x1000", "exec": "0x1000",
+          "patch": [{"find": "DB4C", "replace": "3EFF", "count": 2}]}],
+        tmp_path)
+    bus = Bus(fake_monitor(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    bus.press(0, 2)
+    assert run_until_pc(cpu, 0x1000, 20_000_000), "patched binary never entered"
+    assert bytes(bus.ram[0x1000:0x1007]) == bytes(
+        [0x3E, 0xFF, 0x00, 0x00, 0x3E, 0xFF, 0x76])
+    import pytest
+    with pytest.raises(SystemExit, match="matches 2 places, expected 1"):
+        ml.build_pages(
+            [{"type": "binary", "name": "J", "file": "j.bin",
+              "load": "0x1000", "exec": "0x1000",
+              "patch": [{"find": "DB4C", "replace": "3EFF"}]}], tmp_path)
+
+
 def test_willy2_boots_through_the_compat_monitor():
     # The full prize chain, against the real ROM: menu -> key -> hotspot ->
     # JMP FFF0 -> the -3 relocates its own -2 monitor -> CD stub -> stage-2

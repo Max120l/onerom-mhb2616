@@ -778,6 +778,28 @@ def build_pages(entries: list, root: Path) -> tuple:
             if "high" in ent:
                 high = (int(ent["high"]["load"], 0),
                         (root / ent["high"]["file"]).read_bytes())
+            if "patch" in ent:
+                # Byte-level edits to the shipped program, find/replace over
+                # the whole payload with an expected count -- a patch that
+                # matches the wrong number of places is a wrong patch.  The
+                # customer: the 4004-club games poll their joystick on port
+                # 4Ch and treat a low bit as pressed, and with nothing on
+                # the GPIO connector the port reads low, so MANIC MINER 2's
+                # miner walks off on his own.  IN 4Ch (DB 4C) -> MVI A,FFh
+                # (3E FF) is the keyboard-only edition.
+                buf = bytearray(payload)
+                for p in ent["patch"]:
+                    find, repl = bytes.fromhex(p["find"]), bytes.fromhex(p["replace"])
+                    if len(find) != len(repl):
+                        raise SystemExit(f"error: {name}: patch {p['find']} -> "
+                                         f"{p['replace']} changes length")
+                    n = buf.count(find)
+                    if n != p.get("count", 1):
+                        raise SystemExit(f"error: {name}: patch {p['find']} "
+                                         f"matches {n} places, expected "
+                                         f"{p.get('count', 1)}")
+                    buf = bytearray(bytes(buf).replace(find, repl))
+                payload = bytes(buf)
             if "overlay" in ent and ent["overlay"].get("boot", True):
                 # The cargo monitor's variables, as its own startup leaves
                 # them ("boot": false ships the code alone).

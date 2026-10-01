@@ -609,6 +609,19 @@ bench taught them:
   reader forever.  The check is skipped for -1 games, which are
   cold-verified inside the -2 monitor by design and land in its code
   wherever their monit1 entry points happen to point.
+- **Stripes are not a picture.**  BOMBARDER passed on a 9,152-byte
+  screen of vertical stripes -- too regular for the noise check -- and
+  rolled them on the bench.  It had crashed into empty RAM and was
+  executing NOP after NOP, painting with the odd STAX it crossed; it
+  never read a port.  Healthy games execute 0-3% NOPs, it 12% and
+  more: a run above 8% is "runs through empty RAM".
+- **The joystick port reads low when nothing is plugged in.**  The
+  4004-club games poll port 4Ch, pressed = 0, and on this machine an
+  empty GPIO connector reads 0 on every line, so MANIC MINER 2's miner
+  walked right by himself (TREASURE ISLAND and SABOTER read the port
+  too but only act on it in joystick mode).  A `patch` list on an
+  entry -- find/replace over the payload with an expected match count
+  -- ships a keyboard edition: `IN 4Ch` becomes `MVI A,FFh`.
 - **Judge the screen at its fullest.**  Adding S to the gauntlet's keys
   failed two shipped games: MESTO and ONA A DUCH start a level on S and
   wipe their title, and the "no draw" floor was measured on the final

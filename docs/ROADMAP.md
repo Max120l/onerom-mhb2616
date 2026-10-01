@@ -261,14 +261,22 @@ nothing; MUSICA and DAM stop at 8BCEh with bytes left; JASON, HIGHENC,
 SPINDZ, PISQORKY, LEMM256K and -WILLY- cap without draining under any
 monitor); composite pages (a BASIC plus the module software it loads,
 e.g. `wurmi`/`kli2`, which have no boot stub of their own); more than
-16 entries per menu; and a 4004 joystick, now that there is a shelf of
-games written for one.  They poll port 4Ch -- the GPIO 8255's port A
--- active low, and the mask table in BOULDER DASH 4 (confirmed by
-driving each bit in the emulator and watching the robot) reads: bit 0
-down, bit 1 up, bit 2 right, bit 3 left, bit 4 fire; each bit simply
-injects the key code the game already understands (Y, E, 85h, 83h,
-'0').  An ESP32 running Bluepad32 with five open-drain pins into the
-GPIO connector would do.
+16 entries per menu; and a joystick for the "+4" games.  The 4 is not a
+product: 4004/482 was the Svazarm club whose members wrote them, and
+the club's own JOYDEMO source (in dam+2.ptp) is the interface spec --
+`OUT 4Fh,92h` (the GPIO 8255 in mode 0, port A input), `OUT 4Eh,10h`
+(11h "for both joysticks": a port-C enable per stick), then `IN 4Ch`,
+"bity jsou negované": bit 0 down, bit 1 up, bit 2 right, bit 3 left,
+bit 4 fire, a pressed switch reading 0; a second stick on 4Dh.  The
+mask table in BOULDER DASH 4 agrees, confirmed by driving each bit in
+the emulator and watching the robot, and each bit just injects the key
+code the game already understands (Y, E, 85h, 83h, '0').  With nothing
+on the connector the port reads low on this machine -- every bit
+"pressed" -- which is why MANIC MINER 2's miner walks off by himself;
+the keyboard edition patches its `IN 4Ch` to `MVI A,FFh`.  An adapter
+must therefore drive the lines high when idle, not merely release
+them: an ESP32 running Bluepad32 with five push-pull pins (3.3 V is a
+valid high for the 8255) into the GPIO connector would do.
 
 ## Parked
 

@@ -38,6 +38,7 @@ STEPS_SETTLE = 2_500_000
 NUDGES = [("SPACE", 0, 16), ("EOL", 14, 16), ("1", 0, 2),
           ("H", 5, 8), ("S", 1, 8)]
 LIT_PASS = 300                  # drawn bytes that count as "it runs"
+NOP_SLED_PCT = 8                # share of executed NOPs that means a crash
 SENTINEL = 0xAA
 
 
@@ -256,11 +257,16 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None,
     bus, cpu = mk_machine()
     vram_hits = 0
 
+    nops = steps = 0
+
     def run(n, presses=None):
-        nonlocal vram_hits
+        nonlocal vram_hits, nops, steps
         if presses:
             bus.press(*presses)
         for _ in range(n):
+            if bus.read(cpu.pc) == 0x00:
+                nops += 1
+            steps += 1
             cpu.step()
             pc = cpu.pc
             if pc >= 0xC000 and (pc < 0xE000 or not rom_at_e000) \
@@ -308,6 +314,14 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None,
     if tape_check and any(s - 0x10 <= cpu.pc < s + 0x20
                           for s in usart_sites(bytes(bus.rom), base)):
         return 'waits for tape', lit_bytes(bus), bus
+    # A program running through empty RAM executes NOP after NOP (and the
+    # odd STAX from whatever bytes the sled crosses): BOMBARDER drew a
+    # full screen of regular stripes that way -- too regular for the
+    # noise check -- and read no port at all.  Healthy games sit at 0-3%
+    # NOPs; it was at 12%.
+    if steps and nops * 100 // steps >= NOP_SLED_PCT:
+        return f'runs through empty RAM ({nops * 100 // steps}% NOP)', \
+            lit_bytes(bus), bus
     lit, visible = best
     if lit < LIT_PASS:
         return f'no draw ({lit} lit)', lit, bus
