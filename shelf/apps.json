@@ -80,9 +80,6 @@
      "audition": "DAT PMD"
     },
     {
-     "audition": "PL/1"
-    },
-    {
      "audition": "VMON9000"
     }
    ]
@@ -91,7 +88,15 @@
    "name": "MUSIC",
    "picks": [
     {
-     "audition": "TELEMANN"
+     "audition": "MICRHYTM",
+     "name": "MICRORHYTHM",
+     "override": {
+      "mode": null,
+      "overlay": {
+       "file": "monit1.rom",
+       "at": "0x8000"
+      }
+     }
     }
    ]
   }

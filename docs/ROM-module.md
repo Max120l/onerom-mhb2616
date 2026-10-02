@@ -613,8 +613,20 @@ bench taught them:
   screen of vertical stripes -- too regular for the noise check -- and
   rolled them on the bench.  It had crashed into empty RAM and was
   executing NOP after NOP, painting with the odd STAX it crossed; it
-  never read a port.  Healthy games execute 0-3% NOPs, it 12% and
-  more: a run above 8% is "runs through empty RAM".
+  never read a port.  Counting NOPs alone misfired on timing loops, so
+  the rule is *where* they execute: a NOP fetched from memory nothing
+  loaded and nothing wrote is a sled through empty RAM.  BOMBARDER ran
+  4.7 million of them; JERRY, the noisiest healthy game, 1,776; code a
+  program copies into place before running (BOULDER DASH's engine,
+  moved from 2150h to 0150h) counts as written.  Over 100,000 is
+  "runs through empty RAM".
+- **The tape header says what a block is.**  TELEMANN and PL/1 reached
+  the apps image as music -- they are songs for the MUSICA editor,
+  type `M` in their headers, and "ran" by executing their notes as
+  code until the empty-RAM rule caught them.  The factory now
+  auditions only type `?` blocks (machine-code programs); BASIC
+  programs, level data, songs, text and sources are listed as what
+  they are.
 - **The joystick port reads low when nothing is plugged in.**  The
   4004-club games poll port 4Ch, pressed = 0, and on this machine an
   empty GPIO connector reads 0 on every line, so MANIC MINER 2's miner
@@ -631,9 +643,11 @@ bench taught them:
   the save finish and fall back to the prompt, so the extraction
   verified; the bench's tape interface waited in the save forever.  A
   handoff candidate is now watched for 200,000 steps and rejected if
-  it sends four or more bytes on the tape port (TREASURE ISLAND's init
-  sends one), the nudge order puts the play keys G and P before S, and
-  the real entries came out at 0000h and 0500h.
+  the monitor's own code sends four or more bytes on the tape port --
+  games initialise the USART from their own code (TREASURE ISLAND
+  sends a byte, VLAK several) and that is not a save -- the nudge
+  order puts the play keys G and P before S, and the real entries came
+  out at 0000h and 0500h.
 - **Streamed levels cannot ship.**  LEMMINGS passed on its menu and
   asked for the tape at START: the game streams sixty level "sectors"
   from tape as you play (SEKTOR01-60 on the same tape are level data,

@@ -38,7 +38,7 @@ STEPS_SETTLE = 2_500_000
 NUDGES = [("SPACE", 0, 16), ("EOL", 14, 16), ("1", 0, 2),
           ("H", 5, 8), ("S", 1, 8)]
 LIT_PASS = 300                  # drawn bytes that count as "it runs"
-NOP_SLED_PCT = 8                # share of executed NOPs that means a crash
+EMPTY_NOPS_MAX = 100_000        # NOPs executed outside the program = crash
 SENTINEL = 0xAA
 
 
@@ -161,7 +161,11 @@ def rip_turbo(prog: dict, monitors: list):
                 out = bus.out
 
                 def guarded_out(port, v):
-                    if (port & 0xFD) == 0x1C:
+                    # only the monitor's own tape routine counts: games
+                    # initialise the USART from their own code (TREASURE
+                    # ISLAND sends a byte, VLAK several) and that is not
+                    # a save
+                    if (port & 0xFD) == 0x1C and 0x8000 <= cpu.pc < 0x9000:
                         tx[0] += 1
                     out(port, v)
                 bus.out = guarded_out
@@ -263,11 +267,12 @@ def verify_cold(image: bytes, load: int, exec_: int, regs: dict,
     def exec_ok(pc):
         return any(a <= pc < b for a, b in ok)
     return gauntlet(mk, rom_at_e000=False, exec_ok=exec_ok,
-                    tape_check=tape_check)
+                    tape_check=tape_check,
+                    loaded=[(load, load + len(image))] + ok)
 
 
 def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None,
-             tape_check: bool = True):
+             tape_check: bool = True, loaded=()):
     """Settle, nudge, then judge -- the full obstacle course a shelf entry
     must survive, with every check named after the game that taught it:
 
@@ -291,16 +296,32 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None,
     bus, cpu = mk_machine()
     vram_hits = 0
 
-    nops = steps = 0
+    # Executing a NOP from memory that was never loaded and never written
+    # is running through empty RAM -- the crash signature.  Loaded ranges
+    # come from the caller; runtime writes are tracked here, because
+    # games copy code about before running it (BOULDER DASH moves its
+    # engine from 2150h to 0150h).
+    written = bytearray(0x10000)
+    write = bus.write
+
+    def tracked_write(a, v):
+        written[a & 0xFFFF] = 1
+        write(a, v)
+    bus.write = tracked_write
+    empty_nops = 0
+
+    def in_loaded(pc):
+        return any(lo <= pc < hi for lo, hi in loaded)
 
     def run(n, presses=None):
-        nonlocal vram_hits, nops, steps
+        nonlocal vram_hits, empty_nops
         if presses:
             bus.press(*presses)
         for _ in range(n):
-            if bus.read(cpu.pc) == 0x00:
-                nops += 1
-            steps += 1
+            pc = cpu.pc
+            if pc < 0x8000 and bus.read(pc) == 0x00 and not written[pc] \
+                    and not in_loaded(pc):
+                empty_nops += 1
             cpu.step()
             pc = cpu.pc
             if pc >= 0xC000 and (pc < 0xE000 or not rom_at_e000) \
@@ -348,14 +369,15 @@ def gauntlet(mk_machine, rom_at_e000: bool, exec_ok=None,
     if tape_check and any(s - 0x10 <= cpu.pc < s + 0x20
                           for s in usart_sites(bytes(bus.rom), base)):
         return 'waits for tape', lit_bytes(bus), bus
-    # A program running through empty RAM executes NOP after NOP (and the
-    # odd STAX from whatever bytes the sled crosses): BOMBARDER drew a
-    # full screen of regular stripes that way -- too regular for the
-    # noise check -- and read no port at all.  Healthy games sit at 0-3%
-    # NOPs; it was at 12%.
-    if steps and nops * 100 // steps >= NOP_SLED_PCT:
-        return f'runs through empty RAM ({nops * 100 // steps}% NOP)', \
-            lit_bytes(bus), bus
+    # BOMBARDER drew a full screen of regular stripes -- too regular for
+    # the noise check -- by running through empty RAM: NOP after NOP,
+    # painting with the odd STAX the sled crossed, 4.7 million of them
+    # outside anything loaded.  A healthy game executes a few thousand
+    # at most (JERRY: 1,776); a NOP delay loop inside the program does
+    # not count, nor does code the program copied into place itself.
+    if empty_nops > EMPTY_NOPS_MAX:
+        return f'runs through empty RAM ({empty_nops} NOPs outside ' \
+               f'the program)', lit_bytes(bus), bus
     lit, visible = best
     if lit < LIT_PASS:
         return f'no draw ({lit} lit)', lit, bus
@@ -476,7 +498,8 @@ def audition(prog: dict, monit3: bytes, env: str):
         bus.usart_reads = 0
         cpu.pc = load                      # entry = header start field
         return bus, cpu
-    return gauntlet(mk, rom_at_e000=(env != 'v2'))
+    return gauntlet(mk, rom_at_e000=(env != 'v2'),
+                    loaded=[(load, load + len(body))])
 
 
 def gather_ptps(paths):
@@ -622,6 +645,16 @@ def main() -> int:
             if key in seen:
                 continue
             seen.add(key)
+            # The header's type byte says what a block is, and only '?'
+            # is a machine-code program.  The rest -- BASIC ('>'), level
+            # data ('L'), songs ('M'), text ('T'), sources ('A', '%') --
+            # used to be auditioned like code, and two songs for the
+            # MUSICA editor (TELEMANN, PL/1) got as far as the apps
+            # image by drawing garbage.
+            if prog['type'] != '?':
+                report.append((name, src,
+                               f"not a program (type {prog['type']!r})"))
+                continue
             jobs.append((name, src, prog))
 
     import multiprocessing as mp
