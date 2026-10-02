@@ -677,8 +677,9 @@ def main() -> int:
     lines.append("```")
     (args.out / "report.md").write_text("\n".join(lines))
     n_pass = sum(1 for _, _, v in report if v.startswith('PASS'))
-    print(f"{len(report)} programs auditioned, {n_pass} passed "
-          f"-> {args.out}/report.md")
+    n_data = sum(1 for _, _, v in report if v.startswith('not a program'))
+    print(f"{len(report) - n_data} programs auditioned, {n_pass} passed, "
+          f"{n_data} data blocks set aside -> {args.out}/report.md")
     return 0
 
 

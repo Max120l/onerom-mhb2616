@@ -247,11 +247,17 @@ monit1's one-key-per-scan reader cannot see.  One key at a time, H
 first, rescued ten of them (FLAPPY, FRED, MANIC MINER 2, PENETRATOR,
 PANGO, PAMPUCH, MICRORHYTHM and the 4004-joystick editions -- that is
 what the "+4" in the tape names means), and pressing the same keys in
-the gauntlet woke TREASURE ISLAND and BOMBARDER (and PAVUCI, which
-turned out to be a first stage waiting for tape -- a new verdict
-catches that class now).  With the
-corpus grown to every Infoserver package, the census stands at **386
-programs auditioned, 100 through the gauntlet**.  The curation and
+the gauntlet woke TREASURE ISLAND and MISSION.  The preview image's
+bench round then taught the factory three more things: a handoff that
+starts saving to tape is the loader, not the game (PANGO and
+MICRORHYTHM); a program running NOPs through memory nothing loaded
+has crashed, however regular its stripes (BOMBARDER); and the tape
+header's type byte says which blocks are programs at all -- two songs
+for the MUSICA editor had reached the apps image by executing their
+notes.  With the corpus grown to every Infoserver package, the census
+stands at **132 machine-code programs auditioned, 86 through the
+gauntlet** (254 further blocks on the tapes are BASIC, level data,
+songs, text and sources, listed as such).  The curation and
 the build pipeline live in `shelf/` now, after a container recycle
 took the first copy.
 
