@@ -562,7 +562,8 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
                      regs: dict | None = None,
                      screen: tuple | None = None,
                      high: tuple | None = None,
-                     allram: bool = False) -> list:
+                     allram: bool = False,
+                     data: tuple | None = None) -> list:
     """Pages for a binary too big for one page.  Page 1: stub + stage-2 +
     first chunk; continuation pages: raw chunks packed tight.  `screen` is
     an optional (vram_addr, bytes) second segment -- the loading screen a
@@ -592,18 +593,46 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
         raise SystemExit(f"error: {name} loads over the stage-2 loader and "
                          f"its stack at {STAGE2_ORG:04X}-{STAGE2_SP:04X}; "
                          f"not supported yet")
-    chunks = []
-    page, src0 = first_page, PAYLOAD2_BASE
-    for base, data in segments:
-        off = 0
-        while off < len(data):
-            if src0 >= PAGE_CHUNK:
-                page, src0 = page + 1, 0
-            n = min(len(data) - off, PAGE_CHUNK - src0)
-            chunks.append((page, src0, ec_count(n), base + off,
-                           data[off:off + n]))
-            off += n
-            src0 += n
+    def layout(segs):
+        out = []
+        page, src0 = first_page, PAYLOAD2_BASE
+        for base, data in segs:
+            off = 0
+            while off < len(data):
+                if src0 >= PAGE_CHUNK:
+                    page, src0 = page + 1, 0
+                n = min(len(data) - off, PAGE_CHUNK - src0)
+                out.append((page, src0, ec_count(n), base + off,
+                            data[off:off + n]))
+                off += n
+                src0 += n
+        return out
+    data_pages = []
+    if data is not None:
+        # A data store the program reads from the module itself, at
+        # play time -- LEMMINGS' sixty level sectors, which it streams
+        # from tape one at a time.  Shipped as raw pages right after the
+        # program's, PAGE_CHUNK bytes per page from address 0, never
+        # loaded by stage-2.  The program learns where they begin from
+        # the one byte poked at `page_at`: the first data page's number.
+        page_at, blob = data
+        base = layout(segments)[-1][0] + 1
+        if base + (len(blob) + PAGE_CHUNK - 1) // PAGE_CHUNK > MAX_PAGES:
+            raise SystemExit(f"error: {name}: data pages run past page "
+                             f"{MAX_PAGES}")
+        poked = False
+        for i, (b, d) in enumerate(segments):
+            if b <= page_at < b + len(d):
+                d = bytearray(d)
+                d[page_at - b] = base & 0xFF
+                segments[i] = (b, bytes(d))
+                poked = True
+        if not poked:
+            raise SystemExit(f"error: {name}: data page_at {page_at:04X}h "
+                             f"is outside every shipped segment")
+        data_pages = [pad_page(blob[i:i + PAGE_CHUNK])
+                      for i in range(0, len(blob), PAGE_CHUNK)]
+    chunks = layout(segments)
     stage2 = build_stage2([(p, s, c, d) for p, s, c, d, _ in chunks],
                           exec_, v2, regs, allram)
     sig = 0xCD if v2 else 0xCC
@@ -627,7 +656,7 @@ def multipage_binary(payload: bytes, load: int, exec_: int, name: str,
             else:
                 assert s == 0
                 pages.append(blob)
-    return [pad_page(pg) for pg in pages]
+    return [pad_page(pg) for pg in pages] + data_pages
 
 
 def page_from_binary(payload: bytes, load: int, exec_: int, name: str,
@@ -817,9 +846,13 @@ def build_pages(entries: list, root: Path) -> tuple:
             if allram and v2:
                 raise SystemExit(f"error: {name}: allram is native-only "
                                  f"(a v2 boot ends AllRAM already)")
+            data = None
+            if "data" in ent:
+                data = (int(ent["data"]["page_at"], 0),
+                        (root / ent["data"]["file"]).read_bytes())
             pages.extend(multipage_binary(payload, load, exec_, what,
                                           page_no, v2, regs, screen, high,
-                                          allram))
+                                          allram, data))
         elif kind == "demo":
             payload, load, exec_ = build_demo()
             pages.append(page_from_binary(payload, load, exec_, "demo"))

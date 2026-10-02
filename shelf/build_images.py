@@ -18,6 +18,7 @@ and BACKs, BASIC-G boots, FLASH CHECK sweeps every page clean -- before
 the firmware is built.  Results land in WORK/out/.
 """
 import argparse
+import importlib
 import json
 import os
 import shutil
@@ -28,6 +29,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 sys.path.insert(0, str(REPO / 'tools'))
+sys.path.insert(0, str(HERE))
 import make_multiload as ml                     # noqa: E402
 import make_screentest as st                    # noqa: E402
 import make_moduletest as mt                    # noqa: E402
@@ -99,6 +101,12 @@ def stage_entry(pick):
     for seg in ('screen', 'high'):
         if seg in e:
             shutil.copy(AUDITION / e[seg]['file'], STAGE / e[seg]['file'])
+    if 'prep' in pick:
+        # A program that needs more than a rip and a patch -- LEMMINGS
+        # wants its level sectors served from the module.  shelf/<prep>.py
+        # writes what it needs into STAGE and returns the entry it wants.
+        mod = importlib.import_module(pick['prep'])
+        e = mod.prepare(e, CORPUS, STAGE)
     return e
 
 

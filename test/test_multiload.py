@@ -542,3 +542,40 @@ def test_two_touch_paging_and_directories(tmp_path):
     bus._module_hotspot_check()
     assert bus.page_events[-1][1] == 2 * 32 + 5, \
         "re-consuming the held commit must be idempotent"
+
+
+def test_data_pages_follow_the_program_and_name_themselves(tmp_path):
+    # A program that reads a data store off the module at play time
+    # (LEMMINGS' level sectors): the blob rides on raw pages right after
+    # the program's, PAGE_CHUNK per page from address 0, never loaded;
+    # the builder pokes the first data page's number into the image at
+    # "page_at".  Here: HLT at 1000h, the poke slot at 1001h, and a blob
+    # two and a half chunks long -> three data pages after the program's.
+    prog = bytes([0x76, 0xEE])
+    blob = bytes((i * 7) & 0xFF for i in range(ml.PAGE_CHUNK * 5 // 2))
+    (tmp_path / "p.bin").write_bytes(prog)
+    (tmp_path / "d.bin").write_bytes(blob)
+    pages, _ = ml.build_pages(
+        [{"type": "binary", "name": "P", "file": "p.bin",
+          "load": "0x1000", "exec": "0x1000",
+          "data": {"file": "d.bin", "page_at": "0x1001"}}], tmp_path)
+    assert len(pages) == 1 + 1 + 3               # menu, program, data
+    assert pages[2][:ml.PAGE_CHUNK] == blob[:ml.PAGE_CHUNK]
+    assert pages[3][:ml.PAGE_CHUNK] == blob[ml.PAGE_CHUNK:2 * ml.PAGE_CHUNK]
+    tail = blob[2 * ml.PAGE_CHUNK:]
+    assert pages[4][:len(tail)] == tail
+    for pg in pages[2:]:
+        assert len(pg) == ml.PAGE
+        assert pg[ml.PAGE_CHUNK:] == bytes([0xFF] * (ml.PAGE - ml.PAGE_CHUNK))
+    bus = Bus(fake_monitor(), pages=pages)
+    cpu = boot(bus)
+    run_steps(cpu, 400_000)
+    bus.press(0, 2)
+    assert run_until_pc(cpu, 0x1000, 20_000_000), "program never entered"
+    assert bus.ram[0x1001] == 2                  # the first data page
+    import pytest
+    with pytest.raises(SystemExit, match="outside every shipped segment"):
+        ml.build_pages(
+            [{"type": "binary", "name": "P", "file": "p.bin",
+              "load": "0x1000", "exec": "0x1000",
+              "data": {"file": "d.bin", "page_at": "0x2000"}}], tmp_path)

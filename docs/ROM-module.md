@@ -648,10 +648,24 @@ bench taught them:
   sends a byte, VLAK several) and that is not a save -- the nudge
   order puts the play keys G and P before S, and the real entries came
   out at 0000h and 0500h.
-- **Streamed levels cannot ship.**  LEMMINGS passed on its menu and
-  asked for the tape at START: the game streams sixty level "sectors"
-  from tape as you play (SEKTOR01-60 on the same tape are level data,
-  not programs), so a module copy ends at the first level's load.
+- **Streamed levels ship as data pages.**  LEMMINGS passed on its menu
+  and asked for the tape at START: the game streams sixty level
+  "sectors" from tape as you play (SEKTOR01-60 on the same tape are
+  level data, not programs), so a module copy ended at the first
+  level's load.  The game reads them through its own byte-level tape
+  reader (IN 1Fh for RxRDY, IN 1Eh for the byte, 16 bytes at 0732h)
+  and its own header search, so the fix changes only where the bytes
+  come from: the sector blocks ride verbatim on raw pages after the
+  program (the manifest's `"data"` entry; the builder pokes the first
+  data page's number into the image), a 161-byte routine in a high
+  segment at BC00h two-touches to the sector's page and copies its
+  block into a staging buffer through the module 8255 -- following it
+  across a page boundary where it crosses one -- and the reader hands
+  out staged bytes.  One more patch keeps the game from adopting the
+  host monitor's reader (it checks for PUSH B at 8B6Ch, which the -3's
+  relocated bit-level reader also starts with).  `shelf/prep_lemmings.py`
+  builds all of it from the tape; every sector was fetched and compared
+  byte for byte in the emulator before the first flash.
 - **Judge the screen at its fullest.**  Adding S to the gauntlet's keys
   failed two shipped games: MESTO and ONA A DUCH start a level on S and
   wipe their title, and the "no draw" floor was measured on the final

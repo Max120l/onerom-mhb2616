@@ -261,6 +261,14 @@ songs, text and sources, listed as such).  The curation and
 the build pipeline live in `shelf/` now, after a container recycle
 took the first copy.
 
+LEMMINGS, the one pass the census could not ship -- it streams sixty
+level sectors from tape as you play -- now plays from the module: the
+sectors ride on raw data pages after the program, and a 161-byte
+routine patched into the game's own tape reader fetches each one
+through the module 8255 instead (`shelf/prep_lemmings.py`,
+docs/ROM-module.md).  Every sector was fetched and compared in the
+emulator; the first level loads and plays from a cold menu boot.
+
 Remaining, in rising ambition: the last turbo hold-outs (MANIC+2 and
 MANIC23c -- one caps with tape unread, the other rips but draws
 nothing; MUSICA and DAM stop at 8BCEh with bytes left; JASON, HIGHENC,

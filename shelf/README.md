@@ -45,6 +45,15 @@ that monitor's startup to ship the variables it keeps in the video
 margins (font address, cursor, key table), and the loader switches to
 AllRAM before the jump (see docs/ROM-module.md).
 
+A pick may also carry `patch` (find/replace hex over the shipped
+bytes, with an expected match count) and `prep`: the name of a module
+in `shelf/` whose `prepare(entry, corpus, stage)` writes what the
+program needs into the stage directory and returns the entry it wants
+built. `prep_lemmings.py` is the one so far: it puts LEMMINGS' sixty
+level sectors on raw pages after the program (the manifest's `data`
+entry) and patches the game's tape reader to fetch them from the
+module.
+
 The games image is sorted by display name and split into directories of
 11; the directory labels follow from the names. `build_images.py` stops
 if an image would exceed 128 pages (FLASH CHECK's grid) — drop a pick to
