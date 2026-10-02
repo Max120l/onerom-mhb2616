@@ -267,7 +267,8 @@ sectors ride on raw data pages after the program, and a 161-byte
 routine patched into the game's own tape reader fetches each one
 through the module 8255 instead (`shelf/prep_lemmings.py`,
 docs/ROM-module.md).  Every sector was fetched and compared in the
-emulator; the first level loads and plays from a cold menu boot.
+emulator; the first level loads and plays from a cold menu boot, and
+the bench agreed: flash check clean, LEMMINGS plays from the module.
 
 Remaining, in rising ambition: the last turbo hold-outs (MANIC+2 and
 MANIC23c -- one caps with tape unread, the other rips but draws

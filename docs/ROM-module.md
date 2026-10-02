@@ -665,7 +665,9 @@ bench taught them:
   host monitor's reader (it checks for PUSH B at 8B6Ch, which the -3's
   relocated bit-level reader also starts with).  `shelf/prep_lemmings.py`
   builds all of it from the tape; every sector was fetched and compared
-  byte for byte in the emulator before the first flash.
+  byte for byte in the emulator before the first flash, and the bench
+  confirmed it: the page switches from inside a running game behave
+  exactly as they do from the menu.
 - **Judge the screen at its fullest.**  Adding S to the gauntlet's keys
   failed two shipped games: MESTO and ONA A DUCH start a level on S and
   wipe their title, and the "no draw" floor was measured on the final
