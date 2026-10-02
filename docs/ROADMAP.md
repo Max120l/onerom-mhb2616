@@ -291,7 +291,12 @@ on the connector the port reads low on this machine -- every bit
 the keyboard edition patches its `IN 4Ch` to `MVI A,FFh`.  An adapter
 must therefore drive the lines high when idle, not merely release
 them: an ESP32 running Bluepad32 with five push-pull pins (3.3 V is a
-valid high for the 8255) into the GPIO connector would do.
+valid high for the 8255) into the GPIO connector would do.  That
+adapter is written -- `joystick/`, one sketch, two sticks, the K3/K4
+pin list from the club's own "482. STICK" program (and the Infoserver's
+connector page, which also says why: the port lines sit behind a bus
+driver whose DIR pin must be grounded for input) -- and compiles;
+the bench has not seen it yet.
 
 ## Parked
 
