@@ -95,7 +95,8 @@ turn it on.
 
 Bluepad32 handles the pairing: put the gamepad in pairing mode and it
 connects; it reconnects on its own afterwards.  To forget every
-pairing, hold the BOOT button while resetting the ESP32.  The serial
+pairing, reset the ESP32 and press BOOT within the first three seconds
+(not held through the reset: that is the chip's flashing-mode strap).  The serial
 monitor at 115200 baud shows connections and every stick change.
 
 ## Flashing a ready-made image

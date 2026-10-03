@@ -161,11 +161,23 @@ void setup() {
 #endif
 
     Serial.printf("PMD 85 joystick adapter, Bluepad32 %s\r\n", BP32.firmwareVersion());
-    if (digitalRead(BOOT_BUTTON) == LOW) {
-        Serial.println("BOOT held: forgetting every paired gamepad");
-        BP32.forgetBluetoothKeys();
+    // BOOT pressed within the first three seconds after reset forgets
+    // every pairing.  Not held through the reset itself: GPIO 0 low at
+    // reset is the chip's own flashing-mode strap, and the sketch never
+    // starts.
+    Serial.println("press BOOT in the next 3 s to forget every paired gamepad");
+    bool forget = false;
+    for (uint32_t t0 = millis(); millis() - t0 < 3000; delay(10)) {
+        if (digitalRead(BOOT_BUTTON) == LOW) {
+            forget = true;
+            break;
+        }
     }
     BP32.setup(&onConnectedController, &onDisconnectedController);
+    if (forget) {
+        Serial.println("BOOT pressed: forgetting every paired gamepad");
+        BP32.forgetBluetoothKeys();
+    }
     BP32.enableVirtualDevice(false);
     BP32.enableNewBluetoothConnections(true);
 }
