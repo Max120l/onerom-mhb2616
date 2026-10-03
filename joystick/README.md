@@ -1,191 +1,151 @@
-# Bluetooth joystick adapter: PMD 85 and C64
+# Bluetooth joystick adapter
 
-An ESP32 that turns a Bluetooth gamepad into a joystick, from one
-sketch (`btjoy/btjoy.ino`) with two build targets:
+An ESP32 that turns a Bluetooth gamepad into a joystick for a shelf of
+machines, from one firmware: the machine is picked from a menu on a
+small OLED, with a rotary encoder or two buttons, and remembered across
+power cycles.  Bluepad32 brings the gamepads in (most Bluetooth pads,
+Classic and BLE); a table of profiles says how each machine wants its
+switch lines driven.  Adding a machine is one line in that table.
 
-- **PMD 85**: a 4004/482 club stick on the GPIO connector -- the stick
-  the "+4" games (BOULDER DASH 4, FLAPPY 4, FRED, MANIC MINER 2,
-  PENETRATOR, PAMPUCH ...) were written for.
-- **C64**: a stick on control port 2 (and a second one on port 1).
+## Profiles
 
-No configuration page: pair a gamepad, plug the ESP32 in, play.  The
-gamepad side, the pairing and the pins are the same on both; what
-differs is how the lines are driven, and that difference matters.
-
-## Gamepad mapping
-
-- D-pad, or the left stick past about 40 % travel: the four directions.
-  Opposite directions at once are dropped (a stick cannot do that).
-- PMD 85: A, B, X, Y, L1, R1 are fire.  C64: A, B, L1, R1 are fire and
-  X, Y are *up* -- C64 games jump on up, and a button spares the thumb.
-- Gamepad 1 is stick 1, gamepad 2 is stick 2; the player LEDs show
-  which is which on pads that have them.
-- The on-board LED (GPIO 2) lights while a gamepad is connected.
-
-Bluepad32 handles the pairing: put the gamepad in pairing mode (the
-explicit pairing combination, not just power on) and it connects; it
-reconnects on its own afterwards.  To forget every pairing, reset the
-ESP32 and press BOOT within the first three seconds -- not held through
-the reset, which is the chip's own flashing-mode strap.  The serial
-monitor at 115200 baud shows connections and a line per stick change.
-
-The ESP32 pins are the same for both targets, chosen clear of the
-strapping pins (0, 2, 5, 12, 15) and all below GPIO 32, so the sketch
-sets a whole stick in one register write -- the machine never samples
-a half-updated direction.
-
-| Stick 1 | ESP32 | Stick 2 | ESP32 |
+| Profile | Lines | Idle | Buttons |
 |:--|:--|:--|:--|
-| up | GPIO 17 | up | GPIO 23 |
-| down | GPIO 16 | down | GPIO 22 |
-| left | GPIO 19 | left | GPIO 26 |
-| right | GPIO 18 | right | GPIO 25 |
-| fire | GPIO 21 | fire | GPIO 27 |
+| PMD 85 4004/482 | up down left right fire | driven high | A B L1 R1 X Y: fire |
+| C64 / VIC-20 / C128 | up down left right fire | let go | A B L1 R1: fire; X Y: up (jump) |
+| Amiga (2 buttons) | + pin 9 | let go | A B L1 R1: fire; X Y: button 2 |
+| Atari 2600 / 8-bit / ST | up down left right fire | let go | A B L1 R1 X Y: fire |
+| ZX Spectrum Kempston | up down left right fire | let go | A B L1 R1 X Y: fire |
+| Sega Master System | + pin 9 | let go | A B L1 R1: button 1; X Y: button 2 |
+| MSX | + pin 7 | let go | A B L1 R1: A; X Y: B |
 
-Put a **470 Ω resistor in series with each of the ten lines** on either
-machine.
+Every machine here reads a joystick as a handful of switch lines; the
+differences are whether an idle line must be driven high or merely let
+go, which connector pins carry which switch, and what a second button
+is.
 
-## PMD 85
+- **PMD 85**: the club's JOYDEMO (`dam+2.ptp`) is the spec.  The game
+  puts the GPIO 8255 (4Ch-4Fh) in mode 0 with port A as input, raises
+  PC4 as the stick's supply, then polls `IN 4Ch`: bit 0 down, 1 up,
+  2 right, 3 left, 4 fire, a pressed switch reading 0.  With nothing on
+  the connector the port reads **low** -- every bit "pressed" (MANIC
+  MINER 2's miner walks off by himself) -- so this profile drives the
+  lines high when idle, push-pull.
+- **Atari-style DE-9** (everything else): a pressed switch shorts its
+  pin to ground; the machine's pull-ups hold it high otherwise.  On
+  the C64 and the Amiga those lines are the keyboard matrix, which the
+  machine itself drives on every scan, so these profiles run the lines
+  **open-drain**: pulled low when pressed, let go otherwise, never
+  driven high.  Pin 6 is fire; a second button is pin 9 (Amiga, Master
+  System) or pin 7 (MSX).  Lines a profile does not use are left
+  floating, so MSX's pin-7 button never meets Atari's pin-7 +5 V.
 
-### The interface
+The profile shown on the OLED is the one driving the lines.  Picking
+"PMD 85" while plugged into a C64 would drive the CIA's keyboard lines
+high, which is the one thing to not do; the display is there so you
+can see.
 
-The club's own JOYDEMO source (on `dam+2.ptp`) is the spec.  The game
-puts the GPIO 8255 (ports 4Ch-4Fh) in mode 0 with port A as input
-(`OUT 4Fh,92h`), raises PC4 as the stick's supply (`OUT 4Eh,10h`;
-`11h` raises PC0 as well, for a second stick on port B), then polls
-`IN 4Ch`.  "Bity jsou negované": bit 0 down, bit 1 up, bit 2 right,
-bit 3 left, bit 4 fire, a pressed switch reading 0; a second stick is
-`IN 4Dh`.  The club's "482. STICK" program on the same tape draws the
-original: five switches, a transistor on the fire button, and the
-connector list below -- which is why the adapter follows that list
-pin for pin.
+## Wiring
 
-With nothing on the connector the port reads **low** on this machine,
-every bit "pressed" (MANIC MINER 2's miner walks off by himself).  A
-real stick pulls the lines up through PC4; this build drives them
-high when idle and low when pressed, push-pull, so an unpaired gamepad
-is a stick nobody is touching.
+All ESP32 pins are chosen clear of the strapping pins and the I2C
+pair.  Put a **470 Ω resistor in series with every stick line** on
+every machine: the 8255 and the CIA read 3.3 V as a solid high, the
+pulled-low level stays well under their thresholds, and the resistor
+is what keeps both sides safe if a line is ever driven from both ends.
 
-### Wiring
+### Stick lines
 
-GPIO/0 is K3, GPIO/1 is K4 (`pmd85.borik.net`, *Konektory na PMD 85*).
-Both are 20-pin connectors with the same layout; K3 carries port A and
-PC4-PC7, K4 carries port B and PC0-PC3.  **Neither carries +5 V**: the
-ESP32 is powered from its USB socket (a phone charger or a power
-bank).  Share ground.
-
-Stick 1 (gamepad 1), on **K3 / GPIO/0**:
-
-| Signal | K3 pin | ESP32 | Direction |
+| Line | DE-9 pin | Stick 1 | Stick 2 |
 |:--|:--|:--|:--|
-| GND | 1 | GND | -- |
-| DIR | 8 | GND | bus driver to *input* -- a must |
-| PA0 | 14 | GPIO 16 | down |
-| PA1 | 13 | GPIO 17 | up |
-| PA2 | 16 | GPIO 18 | right |
-| PA3 | 15 | GPIO 19 | left |
-| PA4 | 18 | GPIO 21 | fire |
-| PC4 | 12 | GPIO 34 | optional, see *Following the enable* |
+| up | 1 | GPIO 16 | GPIO 26 |
+| down | 2 | GPIO 17 | GPIO 27 |
+| left | 3 | GPIO 18 | GPIO 13 |
+| right | 4 | GPIO 19 | GPIO 14 |
+| fire | 6 | GPIO 23 | GPIO 33 |
+| button 2, pin 9 | 9 | GPIO 25 | -- |
+| button 2, pin 7 (MSX) | 7 | GPIO 32 | -- |
+| ground | 8 | GND | GND |
 
-Stick 2 (gamepad 2), on **K4 / GPIO/1**:
+Stick 2 has the five lines every one-button machine needs.  On the
+C64 and Amiga, stick 1 is **control port 2** (the one most games read)
+and stick 2 is port 1.
 
-| Signal | K4 pin | ESP32 | Direction |
+**DE-9 pin 7 is +5 V** on Atari-style machines and a button on the MSX.
+Leave the GPIO 32 wire off unless MSX is on the menu for that cable,
+and never power the ESP32 from pin 7 on a cable that carries GPIO 32.
+Powering the ESP32 from pin 7 (C64, Amiga, Atari) works like the
+keyboard bridge's own 5 V feed does, but those supplies are not
+generous and Bluetooth draws in bursts: if the adapter resets when a
+pad connects, power it from USB and leave pin 7 unconnected.  Never
+both at once.
+
+### PMD 85 cable
+
+GPIO/0 is K3, GPIO/1 is K4 (`pmd85.borik.net`, *Konektory na PMD 85*),
+20-pin connectors with the same layout: K3 carries port A, K4 port B.
+**Neither carries +5 V**: power the ESP32 from USB.
+
+| K3 / K4 pin | Signal | Stick 1 (K3) | Stick 2 (K4) |
 |:--|:--|:--|:--|
-| GND | 1 | GND | -- |
-| DIR | 8 | GND | bus driver to *input* -- a must |
-| PB0 | 14 | GPIO 22 | down |
-| PB1 | 13 | GPIO 23 | up |
-| PB2 | 16 | GPIO 25 | right |
-| PB3 | 15 | GPIO 26 | left |
-| PB4 | 18 | GPIO 27 | fire |
-| PC0 | 12 | GPIO 35 | optional, see *Following the enable* |
+| 1 | GND | GND | GND |
+| 8 | DIR | GND | GND |
+| 13 | PA1 / PB1 up | GPIO 16 | GPIO 26 |
+| 14 | PA0 / PB0 down | GPIO 17 | GPIO 27 |
+| 15 | PA3 / PB3 left | GPIO 18 | GPIO 13 |
+| 16 | PA2 / PB2 right | GPIO 19 | GPIO 14 |
+| 18 | PA4 / PB4 fire | GPIO 23 | GPIO 33 |
 
-The 8255 reads 3.3 V as a solid high, and the series resistor is what
-keeps both sides safe if a program ever sets the port to output while
-the ESP32 is driving it.  The connector's port lines pass through a
-bidirectional bus driver whose direction pin (DIR, pin 8) floats to
-*output*; grounding it is what turns the connector into an input, and
-without that strap nothing the ESP32 does reaches the 8255.  GPIO 34
-and 35 are input-only pins, which suits the enable sense.
+The connector's port lines pass through a bidirectional bus driver
+whose direction pin (DIR, pin 8) floats to *output*; grounding it is
+what turns the connector into an input, and without that strap
+nothing the ESP32 does reaches the 8255.
 
-### Following the enable (optional)
+### Display and controls
 
-A real stick only pulls its lines up while the program has raised PC4
-(or PC0 for stick 2).  With `FOLLOW_ENABLE 1` in the sketch and the
-pin-12 wire fitted (through a **10 kΩ series resistor**, since it is a
-5 V signal into a 3.3 V input), the adapter drives its lines only
-while that bit is high and floats them otherwise, so a printer or
-another gadget on the port is never fought.  It is off by default:
-not every +4 game is known to raise the bit, and a line that is never
-driven is a stick that never works.  Leave the wire off unless you
-turn it on.
+| Part | ESP32 |
+|:--|:--|
+| OLED SDA | GPIO 21 |
+| OLED SCL | GPIO 22 |
+| OLED VCC, GND | 3V3, GND |
+| encoder A / next button | GPIO 4 |
+| encoder B / previous button | GPIO 5 |
+| encoder push / forget button | GPIO 15 |
 
-### Checking it
+The OLED is a 0.96" SSD1306 128x64 on I2C; for the 1.3" SH1106 kind,
+swap the commented constructor line at the top of the sketch.  The
+encoder and buttons go to ground; the internal pull-ups are on.  The
+firmware builds in two flavours, `UI_ENCODER=1` (rotary encoder with
+push button) and `UI_ENCODER=0` (three buttons: next, previous,
+forget); the merged images carry the flavour in their name.
 
-The test is a game.  BOULDER DASH 4 in the preview image reads the
-stick at its menu and in play, and its mask table at 0970h is how the
-bit order above was confirmed in the emulator.  MANIC MINER 2 (the
-joystick edition, not the keyboard one in the main image) is the
-sensitive case: with the adapter on and no gamepad paired the miner
-must stand still.
+## Using it
 
-## C64
-
-### The interface
-
-The control ports are DE-9: pin 1 up, 2 down, 3 left, 4 right, 6 fire,
-7 +5 V, 8 GND (5 and 9 are the paddle pots, unused).  A pressed switch
-shorts its line to ground; the CIA's pull-ups hold it high otherwise.
-
-Those lines are not a dedicated input: port 1 sits on the keyboard
-matrix rows and port 2 on its columns, and the machine drives the
-columns low itself, line by line, on every keyboard scan.  So on this
-target the five lines are **open-drain**: pulled low when pressed, let
-go otherwise, never driven high.  An adapter that drove them high
-would fight the keyboard scan and stand a good chance of hurting the
-CIA.
-
-### Wiring
-
-Stick 1 (gamepad 1) is **control port 2**, the one most games read;
-stick 2 is control port 1.  A DE-9 *male* plug on the adapter side for
-each.
-
-| DE-9 pin | Signal | Stick 1 (port 2) | Stick 2 (port 1) |
-|:--|:--|:--|:--|
-| 1 | up | GPIO 17 | GPIO 23 |
-| 2 | down | GPIO 16 | GPIO 22 |
-| 3 | left | GPIO 19 | GPIO 26 |
-| 4 | right | GPIO 18 | GPIO 25 |
-| 6 | fire | GPIO 21 | GPIO 27 |
-| 7 | +5 V | ESP32 5V / VIN (see below) | -- |
-| 8 | GND | GND | GND |
-
-Series resistors as above; the pulled-low level stays well under the
-CIA's input threshold through 470 Ω, and the resistor is what the
-ESP32 pins see 5 V through when the lines idle high.
-
-**Power**: pin 7 carries the machine's 5 V.  It will run the ESP32
-(the keyboard bridge's own 5 V feed is the same idea), but the C64's
-supply is not generous and Bluetooth draws in bursts: if the adapter
-resets when a pad connects, power it from USB instead and leave pin 7
-unconnected.  Never both at once.
-
-### Checking it
-
-Any game that moves on port 2.  With the gamepad off, nothing may
-move and the keyboard must behave -- a line stuck low shows up as a
-phantom key.  Then pair and play; X or Y jumps where the game jumps on
-up.
+- The display shows the profile, which pads are connected, their live
+  stick as glyphs (`U D L R F`, `2` for a second button), and whether
+  the lines are open-drain or push-pull.
+- Turn the encoder (or press next / previous) to change the profile.
+  It takes effect at once and is saved a second later ("saving" on the
+  last line while it waits).
+- Pairing: put the gamepad in pairing mode (the explicit pairing
+  combination, not just power on).  It reconnects on its own after
+  that.  Gamepad 1 is stick 1, gamepad 2 is stick 2; the player LEDs
+  show which is which on pads that have them.  The on-board LED (GPIO
+  2) lights while a pad is connected.
+- Forget every pairing: hold the encoder button (or the forget button)
+  for two seconds, or press BOOT within the first three seconds after
+  a reset -- not held through the reset, which is the chip's own
+  flashing-mode strap.
+- Serial monitor at 115200 baud: the profile, connections, and a line
+  per stick change.
 
 ## Flashing a ready-made image
 
-`pmd85_joy-esp32-devkit.bin` and `c64_joy-esp32-devkit.bin` (built
-with the commands below and merged with esptool) flash to offset 0 of
-a plain ESP32 DevKit:
+`btjoy-encoder-esp32-devkit.bin` and `btjoy-buttons-esp32-devkit.bin`
+(built with the commands below and merged with esptool) flash to
+offset 0 of a plain ESP32 DevKit:
 
 ```
-esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x0 pmd85_joy-esp32-devkit.bin
+esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x0 btjoy-encoder-esp32-devkit.bin
 ```
 
 (on Windows, `python -m esptool ... --port COM3 ...` needs no PATH).
@@ -197,23 +157,19 @@ the parts instead -- `bootloader.bin` at 0x1000, `partitions.bin` at
 0x8000, `boot_app0.bin` at 0xE000, the app at 0x10000 -- which the
 build directory provides.
 
-The serial monitor shows the target and Bluepad32 version a second
-after reset, then "gamepad 1 connected" on pairing and a line per
-stick change.
-
 ## Building
 
-The sketch needs the "ESP32 + Bluepad32" board package -- Bluepad32
+The sketch needs the "ESP32 + Bluepad32" board package (Bluepad32
 replaces the stock Bluetooth stack, so it ships its own copy of the
-ESP32 core.  The target is a compile-time define, `TARGET_PMD85` or
-`TARGET_C64`; with neither, the PMD 85 is built.
+ESP32 core) and the U8g2 library.
 
 Arduino IDE: add
 `https://raw.githubusercontent.com/ricardoquesada/esp32-arduino-lib-builder/master/bluepad32_files/package_esp32_bluepad32_index.json`
 under *Additional boards manager URLs*, install *ESP32 + Bluepad32*
-from the Boards Manager, pick your board under *ESP32 + Bluepad32
-Arduino*, open `btjoy/btjoy.ino`.  For the C64, add `#define
-TARGET_C64` above the `#include` line.  Upload.
+from the Boards Manager and *U8g2* from the Library Manager, pick your
+board under *ESP32 + Bluepad32 Arduino*, open `btjoy/btjoy.ino`.  For
+the three-button flavour add `#define UI_ENCODER 0` above the
+`#include` lines.  Upload.
 
 arduino-cli:
 
@@ -221,10 +177,32 @@ arduino-cli:
 export ARDUINO_BOARD_MANAGER_ADDITIONAL_URLS=https://raw.githubusercontent.com/ricardoquesada/esp32-arduino-lib-builder/master/bluepad32_files/package_esp32_bluepad32_index.json
 arduino-cli core update-index
 arduino-cli core install esp32-bluepad32:esp32
-arduino-cli compile --fqbn esp32-bluepad32:esp32:esp32 --build-property "compiler.cpp.extra_flags=-DTARGET_PMD85" joystick/btjoy
-arduino-cli compile --fqbn esp32-bluepad32:esp32:esp32 --build-property "compiler.cpp.extra_flags=-DTARGET_C64"   joystick/btjoy
+arduino-cli lib install U8g2
+arduino-cli compile --fqbn esp32-bluepad32:esp32:esp32 --build-property "compiler.cpp.extra_flags=-DUI_ENCODER=1" joystick/btjoy
+arduino-cli compile --fqbn esp32-bluepad32:esp32:esp32 --build-property "compiler.cpp.extra_flags=-DUI_ENCODER=0" joystick/btjoy
 arduino-cli upload  --fqbn esp32-bluepad32:esp32:esp32 -p /dev/ttyUSB0 joystick/btjoy
 ```
 
 A plain ESP32 DevKit (ESP32-WROOM-32) is the target; the ESP32-S3 and
 C3 have no Bluetooth Classic, which most gamepads need.
+
+## Adding a machine
+
+One line in `PROFILES[]`: a name for the display, whether idle lines
+are let go (open-drain) or driven high, which lines the machine reads,
+which line a second button lands on (or -1), and whether X/Y should
+mean "up".  Machines whose joystick is read against a strobed common
+line rather than ground (the Amstrad CPC's COM1, the MSX's pin 8 when
+a game uses it) are not this kind of profile: a line pulled to ground
+there presses every key in that column.  They need the common line
+sensed, which is a future addition.
+
+## Checking it
+
+- Every profile: with no pad connected, nothing on the machine may
+  move, and its keyboard must behave (a stuck line shows up as a
+  phantom key on the C64).
+- PMD 85: MANIC MINER 2 (the joystick edition in the preview image)
+  must stand still with no pad connected; BOULDER DASH 4 reads the
+  stick at its menu and in play.
+- C64 / Amiga: X or Y jumps where the game jumps on up.
