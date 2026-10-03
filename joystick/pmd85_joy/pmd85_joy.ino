@@ -110,7 +110,7 @@ static void onConnectedController(ControllerPtr ctl) {
         if (controllers[i] == nullptr) {
             controllers[i] = ctl;
             ControllerProperties p = ctl->getProperties();
-            Serial.printf("gamepad %d connected: %s (VID %04x PID %04x)\n",
+            Serial.printf("gamepad %d connected: %s (VID %04x PID %04x)\r\n",
                           i + 1, ctl->getModelName().c_str(),
                           p.vendor_id, p.product_id);
             if (i < 2)
