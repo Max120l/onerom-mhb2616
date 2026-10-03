@@ -129,7 +129,7 @@ static void onDisconnectedController(ControllerPtr ctl) {
                 stickState[i] = 0;
                 driveStick(i == 0 ? STICK1_PINS : STICK2_PINS, 0);
             }
-            Serial.printf("gamepad %d disconnected\n", i + 1);
+            Serial.printf("gamepad %d disconnected\r\n", i + 1);
             return;
         }
     }
@@ -160,7 +160,7 @@ void setup() {
     pinMode(STICK2_ENABLE_PIN, INPUT);
 #endif
 
-    Serial.printf("PMD 85 joystick adapter, Bluepad32 %s\n", BP32.firmwareVersion());
+    Serial.printf("PMD 85 joystick adapter, Bluepad32 %s\r\n", BP32.firmwareVersion());
     if (digitalRead(BOOT_BUTTON) == LOW) {
         Serial.println("BOOT held: forgetting every paired gamepad");
         BP32.forgetBluetoothKeys();
@@ -182,7 +182,7 @@ void loop() {
             uint8_t bits = stickBitsOf(ctl);
             if (bits != stickState[i]) {
                 stickState[i] = bits;
-                Serial.printf("stick %d: %c%c%c%c%c\n", i + 1,
+                Serial.printf("stick %d: %c%c%c%c%c\r\n", i + 1,
                               bits & (1 << BIT_UP) ? 'U' : '.',
                               bits & (1 << BIT_DOWN) ? 'D' : '.',
                               bits & (1 << BIT_LEFT) ? 'L' : '.',

@@ -107,7 +107,17 @@ with esptool) flashes to offset 0 of a plain ESP32 DevKit:
 esptool.py --chip esp32 --port /dev/ttyUSB0 write_flash 0x0 pmd85_joy-esp32-devkit.bin
 ```
 
-or through any browser flasher that takes a merged image at 0x0.
+(on Windows, `python -m esptool ... --port COM3 ...` needs no PATH).
+The offset is **0x0**: the merged image begins with 4 KB of padding so
+the bootloader lands at 0x1000 by itself.  Written at 0x1000 instead,
+everything sits one sector high and the chip prints `invalid header:
+0xffffffff` forever.  A browser flasher of the ESP Web Tools kind wants
+the parts instead -- `bootloader.bin` at 0x1000, `partitions.bin` at
+0x8000, `boot_app0.bin` at 0xE000, the app at 0x10000 -- which the
+build directory provides.
+
+The serial monitor shows the Bluepad32 banner a second after reset,
+then "gamepad 1 connected" on pairing and a line per stick change.
 
 ## Building
 
