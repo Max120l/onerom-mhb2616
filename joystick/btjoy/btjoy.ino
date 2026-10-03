@@ -1,31 +1,54 @@
-// PMD 85 Bluetooth joystick adapter -- a 4004/482 club stick on an ESP32.
+// Bluetooth joystick adapter on an ESP32, for two machines from one
+// source: the PMD 85's 4004/482 club stick, and the C64's control ports.
 //
-// The club's JOYDEMO (dam+2.ptp) is the interface: the GPIO 8255 at
-// 4Ch-4Fh in mode 0 with port A as input (OUT 4Fh,92h), PC4 raised as the
-// stick's supply (OUT 4Eh,10h; 11h raises PC0 too, for a second stick on
-// port B), then IN 4Ch, "bity jsou negovane": bit 0 down, bit 1 up,
-// bit 2 right, bit 3 left, bit 4 fire, a pressed switch reading 0.  With
-// nothing on the connector the port reads low on the machine -- every
-// bit "pressed" -- so this adapter drives its five lines high when idle
-// and low when pressed, instead of merely releasing them.
+// Build with one of these defined (README.md has the arduino-cli lines);
+// with neither, the PMD 85 is the target:
+//
+//   TARGET_PMD85   The club's JOYDEMO (dam+2.ptp) is the interface: the
+//                  GPIO 8255 at 4Ch-4Fh in mode 0 with port A as input
+//                  (OUT 4Fh,92h), PC4 raised as the stick's supply
+//                  (OUT 4Eh,10h; 11h raises PC0 too, for a second stick
+//                  on port B), then IN 4Ch, "bity jsou negovane": bit 0
+//                  down, bit 1 up, bit 2 right, bit 3 left, bit 4 fire, a
+//                  pressed switch reading 0.  With nothing on the
+//                  connector the port reads low on the machine -- every
+//                  bit "pressed" -- so the lines are driven high when
+//                  idle and low when pressed, push-pull.
+//
+//   TARGET_C64     Control ports 1 and 2, DE-9: pin 1 up, 2 down, 3 left,
+//                  4 right, 6 fire, 8 GND, a pressed switch shorting the
+//                  line to ground.  The lines are the CIA's keyboard
+//                  matrix rows and columns, which the machine itself
+//                  drives during every keyboard scan, so here the lines
+//                  are open-drain: pulled low when pressed and let go
+//                  otherwise, never driven high.
 //
 // Bluetooth gamepads come in through Bluepad32: d-pad or left stick for
-// the four directions, any face button or shoulder button for fire.
-// Gamepad 1 drives stick 1 on GPIO/0 (K3, port A), gamepad 2 drives
-// stick 2 on GPIO/1 (K4, port B).  Pins and wiring are in README.md.
+// the four directions, face and shoulder buttons for fire.  Gamepad 1 is
+// stick 1, gamepad 2 is stick 2; which connector that is on each machine
+// is in README.md, with the wiring.
 //
 // Build: the "ESP32 + Bluepad32" board package (see README.md).
 
 #include <Bluepad32.h>
 
-// ---- wiring --------------------------------------------------------------
-// ESP32 output pins, in the 8255's bit order: PA0/PB0 down, PA1/PB1 up,
-// PA2/PB2 right, PA3/PB3 left, PA4/PB4 fire.  All below GPIO 32 so one
-// register write sets the whole stick at once.  Each goes through a
-// 470 ohm series resistor to the connector pin.
-static const int STICK1_PINS[5] = {16, 17, 18, 19, 21};   // K3 pins 14,13,16,15,18
-static const int STICK2_PINS[5] = {22, 23, 25, 26, 27};   // K4 pins 14,13,16,15,18
+#if !defined(TARGET_PMD85) && !defined(TARGET_C64)
+#define TARGET_PMD85
+#endif
 
+// ---- wiring --------------------------------------------------------------
+// ESP32 pins per stick, in this order: up, down, left, right, fire.  All
+// below GPIO 32 so one register write sets the whole stick at once.  Each
+// goes through a 470 ohm series resistor to the connector pin.
+enum { UP = 0, DOWN = 1, LEFT = 2, RIGHT = 3, FIRE = 4 };
+
+#if defined(TARGET_PMD85)
+static const char* TARGET_NAME = "PMD 85";
+static const bool LINES_OPEN_DRAIN = false;
+// K3 (GPIO/0) pins 13, 14, 15, 16, 18 = PA1 up, PA0 down, PA3 left,
+// PA2 right, PA4 fire; K4 (GPIO/1) the same pins for port B.
+static const int STICK1_PINS[5] = {17, 16, 19, 18, 21};
+static const int STICK2_PINS[5] = {23, 22, 26, 25, 27};
 // Optional: the stick's "supply" line from the machine (K3 pin 12 = PC4
 // for stick 1, K4 pin 12 = PC0 for stick 2), through a 10 k series
 // resistor into an input-only pin.  With FOLLOW_ENABLE set, the lines
@@ -37,16 +60,23 @@ static const int STICK2_PINS[5] = {22, 23, 25, 26, 27};   // K4 pins 14,13,16,15
 #define FOLLOW_ENABLE 0
 static const int STICK1_ENABLE_PIN = 34;
 static const int STICK2_ENABLE_PIN = 35;
+#elif defined(TARGET_C64)
+static const char* TARGET_NAME = "C64";
+static const bool LINES_OPEN_DRAIN = true;
+// Stick 1 is control port 2 (the one most games read), stick 2 is
+// control port 1.  DE-9 pins 1, 2, 3, 4, 6.
+static const int STICK1_PINS[5] = {16, 17, 18, 19, 21};
+static const int STICK2_PINS[5] = {22, 23, 25, 26, 27};
+#define FOLLOW_ENABLE 0
+#endif
 
 static const int LED_PIN = 2;          // on-board LED: a gamepad is connected
-static const int BOOT_BUTTON = 0;      // held at reset: forget every pairing
+static const int BOOT_BUTTON = 0;      // within 3 s of reset: forget pairings
 
 // ---- gamepad to stick ----------------------------------------------------
 // Left-stick travel beyond which it counts as a direction (axes run
 // -512..511).
 static const int STICK_THRESHOLD = 200;
-
-enum { BIT_DOWN = 0, BIT_UP = 1, BIT_RIGHT = 2, BIT_LEFT = 3, BIT_FIRE = 4 };
 
 static ControllerPtr controllers[BP32_MAX_GAMEPADS];
 static uint8_t stickState[2] = {0, 0};   // pressed bits per stick, 1 = pressed
@@ -64,8 +94,10 @@ static uint32_t allMask(const int pins[5]) {
 }
 
 // Drive one stick's five lines in a single write each way: pressed low,
-// the rest high.  A read by the 8255 between two digitalWrite calls would
-// otherwise see left and right together for a microsecond.
+// the rest high (push-pull) or let go (open-drain: a 1 in the output
+// register is the released state).  A read by the machine between two
+// digitalWrite calls would otherwise see left and right together for a
+// microsecond.
 static void driveStick(const int pins[5], uint8_t pressedBits) {
     uint32_t low = pinMask(pins, pressedBits);
     uint32_t high = allMask(pins) & ~low;
@@ -80,27 +112,35 @@ static void releaseStick(const int pins[5]) {
 
 static void claimStick(const int pins[5]) {
     for (int b = 0; b < 5; b++)
-        pinMode(pins[b], OUTPUT);
+        pinMode(pins[b], LINES_OPEN_DRAIN ? OUTPUT_OPEN_DRAIN : OUTPUT);
 }
 
 static uint8_t stickBitsOf(ControllerPtr ctl) {
     uint8_t bits = 0;
     uint8_t dpad = ctl->dpad();
-    if (dpad & DPAD_DOWN)  bits |= 1 << BIT_DOWN;
-    if (dpad & DPAD_UP)    bits |= 1 << BIT_UP;
-    if (dpad & DPAD_RIGHT) bits |= 1 << BIT_RIGHT;
-    if (dpad & DPAD_LEFT)  bits |= 1 << BIT_LEFT;
-    if (ctl->axisY() > STICK_THRESHOLD)  bits |= 1 << BIT_DOWN;
-    if (ctl->axisY() < -STICK_THRESHOLD) bits |= 1 << BIT_UP;
-    if (ctl->axisX() > STICK_THRESHOLD)  bits |= 1 << BIT_RIGHT;
-    if (ctl->axisX() < -STICK_THRESHOLD) bits |= 1 << BIT_LEFT;
+    if (dpad & DPAD_UP)    bits |= 1 << UP;
+    if (dpad & DPAD_DOWN)  bits |= 1 << DOWN;
+    if (dpad & DPAD_LEFT)  bits |= 1 << LEFT;
+    if (dpad & DPAD_RIGHT) bits |= 1 << RIGHT;
+    if (ctl->axisY() < -STICK_THRESHOLD) bits |= 1 << UP;
+    if (ctl->axisY() > STICK_THRESHOLD)  bits |= 1 << DOWN;
+    if (ctl->axisX() < -STICK_THRESHOLD) bits |= 1 << LEFT;
+    if (ctl->axisX() > STICK_THRESHOLD)  bits |= 1 << RIGHT;
+#if defined(TARGET_C64)
+    // C64 games jump on "up"; a second button for it spares the thumb.
+    if (ctl->a() || ctl->b() || ctl->l1() || ctl->r1())
+        bits |= 1 << FIRE;
+    if (ctl->x() || ctl->y())
+        bits |= 1 << UP;
+#else
     if (ctl->a() || ctl->b() || ctl->x() || ctl->y() || ctl->l1() || ctl->r1())
-        bits |= 1 << BIT_FIRE;
+        bits |= 1 << FIRE;
+#endif
     // Opposite directions at once are a stick no one can push: drop both.
-    if ((bits & (1 << BIT_UP)) && (bits & (1 << BIT_DOWN)))
-        bits &= ~((1 << BIT_UP) | (1 << BIT_DOWN));
-    if ((bits & (1 << BIT_LEFT)) && (bits & (1 << BIT_RIGHT)))
-        bits &= ~((1 << BIT_LEFT) | (1 << BIT_RIGHT));
+    if ((bits & (1 << UP)) && (bits & (1 << DOWN)))
+        bits &= ~((1 << UP) | (1 << DOWN));
+    if ((bits & (1 << LEFT)) && (bits & (1 << RIGHT)))
+        bits &= ~((1 << LEFT) | (1 << RIGHT));
     return bits;
 }
 
@@ -149,18 +189,19 @@ void setup() {
     pinMode(LED_PIN, OUTPUT);
     digitalWrite(LED_PIN, LOW);
 
-    // Idle high before anything else: the machine must never see the
-    // lines low (every bit "pressed") while we come up.
-    claimStick(STICK1_PINS);
-    claimStick(STICK2_PINS);
+    // Released before anything else: the machine must never see the
+    // lines "pressed" while we come up.
     driveStick(STICK1_PINS, 0);
     driveStick(STICK2_PINS, 0);
+    claimStick(STICK1_PINS);
+    claimStick(STICK2_PINS);
 #if FOLLOW_ENABLE
     pinMode(STICK1_ENABLE_PIN, INPUT);
     pinMode(STICK2_ENABLE_PIN, INPUT);
 #endif
 
-    Serial.printf("PMD 85 joystick adapter, Bluepad32 %s\r\n", BP32.firmwareVersion());
+    Serial.printf("%s joystick adapter, Bluepad32 %s\r\n", TARGET_NAME,
+                  BP32.firmwareVersion());
     // BOOT pressed within the first three seconds after reset forgets
     // every pairing.  Not held through the reset itself: GPIO 0 low at
     // reset is the chip's own flashing-mode strap, and the sketch never
@@ -195,11 +236,11 @@ void loop() {
             if (bits != stickState[i]) {
                 stickState[i] = bits;
                 Serial.printf("stick %d: %c%c%c%c%c\r\n", i + 1,
-                              bits & (1 << BIT_UP) ? 'U' : '.',
-                              bits & (1 << BIT_DOWN) ? 'D' : '.',
-                              bits & (1 << BIT_LEFT) ? 'L' : '.',
-                              bits & (1 << BIT_RIGHT) ? 'R' : '.',
-                              bits & (1 << BIT_FIRE) ? 'F' : '.');
+                              bits & (1 << UP) ? 'U' : '.',
+                              bits & (1 << DOWN) ? 'D' : '.',
+                              bits & (1 << LEFT) ? 'L' : '.',
+                              bits & (1 << RIGHT) ? 'R' : '.',
+                              bits & (1 << FIRE) ? 'F' : '.');
             }
         }
     }
